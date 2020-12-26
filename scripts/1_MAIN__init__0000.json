@@ -1,0 +1,318 @@
+{
+    "_default": {
+        "1": {
+            "session_name": "MAIN", 
+            "window_name": "VPN", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "refresh_session", 
+            "args": [
+                "VPN"
+            ]
+        }, 
+        "2": {
+            "session_name": "MAIN", 
+            "window_name": "WEB_LOCAL", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "refresh_session", 
+            "args": [
+                "WEB_LOCAL"
+            ]
+        }, 
+        "3": {
+            "session_name": "MAIN", 
+            "window_name": "ENUM", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "refresh_session", 
+            "args": [
+                "ENUM\npkill socat"
+            ]
+        }, 
+        "4": {
+            "session_name": "MAIN", 
+            "window_name": "NS_RECON", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "refresh_session", 
+            "args": [
+                "NS_RECON"
+            ]
+        }, 
+        "5": {
+            "session_name": "MAIN", 
+            "window_name": "PORT_SCAN", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "refresh_session", 
+            "args": [
+                "PORT_SCAN"
+            ]
+        }, 
+        "6": {
+            "session_name": "MAIN", 
+            "window_name": "OFFENSIVE_WEB", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "refresh_session", 
+            "args": [
+                "OFFENSIVE_WEB"
+            ]
+        }, 
+        "7": {
+            "session_name": "MAIN", 
+            "window_name": "BASH", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "refresh_session", 
+            "args": [
+                "BASH"
+            ]
+        }, 
+        "8": {
+            "session_name": "VPN", 
+            "window_name": "Connect", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "VPN_hack_the_box", 
+            "args": [
+                ""
+            ]
+        }, 
+        "9": {
+            "session_name": "VPN", 
+            "window_name": "Connect", 
+            "pane_nr": 1, 
+            "send_enter": 1, 
+            "exec_script": "VPN_loop_get_internal_ip_addr", 
+            "args": [
+                ""
+            ]
+        }, 
+        "10": {
+            "session_name": "VPN", 
+            "window_name": "Connect", 
+            "pane_nr": 2, 
+            "send_enter": 1, 
+            "exec_script": "VPN_ping_external", 
+            "args": [
+                ""
+            ]
+        }, 
+        "11": {
+            "session_name": "VPN", 
+            "window_name": "Connect", 
+            "pane_nr": 3, 
+            "send_enter": 1, 
+            "exec_script": "VPN_ping_internal", 
+            "args": [
+                ""
+            ]
+        }, 
+        "12": {
+            "session_name": "VPN", 
+            "window_name": "Connect", 
+            "pane_nr": 4, 
+            "send_enter": 0, 
+            "exec_script": "VPN_get_external_ip", 
+            "args": [
+                ""
+            ]
+        }, 
+        "13": {
+            "session_name": "WEB_LOCAL", 
+            "window_name": "0", 
+            "pane_nr": 0, 
+            "send_enter": 1, 
+            "exec_script": "WEB_http_python", 
+            "args": [
+                "serve_http", 
+                "/mnt/hgfs/hacking/programs_kali/linux/", 
+                "8000"
+            ]
+        }, 
+        "14": {
+            "session_name": "WEB_LOCAL", 
+            "window_name": "0", 
+            "pane_nr": 3, 
+            "send_enter": 1, 
+            "exec_script": "WEB_http_python", 
+            "args": [
+                "serve_http", 
+                "/mnt/hgfs/hacking/programs_kali/windows/", 
+                "8010"
+            ]
+        }, 
+        "15": {
+            "session_name": "WEB_LOCAL", 
+            "window_name": "0", 
+            "pane_nr": 2, 
+            "send_enter": 1, 
+            "exec_script": "WEB_smb_share", 
+            "args": [
+                "cd /mnt/hgfs/hacking/programs_kali/smb_exposed \nsmbservehere"
+            ]
+        }, 
+        "16": {
+            "session_name": "WEB_LOCAL", 
+            "window_name": "0", 
+            "pane_nr": 3, 
+            "send_enter": 1, 
+            "exec_script": "", 
+            "args": [
+                ""
+            ]
+        }, 
+        "17": {
+            "session_name": "ENUM", 
+            "window_name": "0", 
+            "pane_nr": 0, 
+            "send_enter": 0, 
+            "exec_script": "ENUM_pwn_listener_python", 
+            "args": [
+                "9050\n"
+            ]
+        }, 
+        "18": {
+            "session_name": "ENUM", 
+            "window_name": "0", 
+            "pane_nr": 0, 
+            "send_enter": 0, 
+            "exec_script": "ENUM_python_source", 
+            "args": [
+                ""
+            ]
+        }, 
+        "19": {
+            "session_name": "ENUM", 
+            "window_name": "0", 
+            "pane_nr": 1, 
+            "send_enter": 0, 
+            "exec_script": "ENUM_pwncat", 
+            "args": [
+                "9051"
+            ]
+        }, 
+        "20": {
+            "session_name": "NS_RECON", 
+            "window_name": "0", 
+            "pane_nr": 0, 
+            "send_enter": 0, 
+            "exec_script": "NS_RECON_wfuzz", 
+            "args": [
+                ""
+            ]
+        }, 
+        "21": {
+            "session_name": "NS_RECON", 
+            "window_name": "0", 
+            "pane_nr": 1, 
+            "send_enter": 0, 
+            "exec_script": "NS_RECON_dnsrecon", 
+            "args": [
+                ""
+            ]
+        }, 
+        "22": {
+            "session_name": "NS_RECON", 
+            "window_name": "0", 
+            "pane_nr": 2, 
+            "send_enter": 1, 
+            "exec_script": "", 
+            "args": [
+                "vim /etc/hosts"
+            ]
+        }, 
+        "23": {
+            "session_name": "NS_RECON", 
+            "window_name": "0", 
+            "pane_nr": 3, 
+            "send_enter": 0, 
+            "exec_script": "NS_RECON_gobuster", 
+            "args": [
+                ""
+            ]
+        }, 
+        "24": {
+            "session_name": "NS_RECON", 
+            "window_name": "0", 
+            "pane_nr": 4, 
+            "send_enter": 0, 
+            "exec_script": "NS_RECON_cewl", 
+            "args": [
+                ""
+            ]
+        }, 
+        "25": {
+            "session_name": "NS_RECON", 
+            "window_name": "0", 
+            "pane_nr": 5, 
+            "send_enter": 0, 
+            "exec_script": "", 
+            "args": [
+                "go get -u github.com/ffuf/ffuf; cd ~/go/bin;./ffuf --version\n./ffuf -w /usr/share/wordlists/rockyou.txt -u https://codingo.io/FUZZ"
+            ]
+        }, 
+        "26": {
+            "session_name": "PORT_SCAN", 
+            "window_name": "0", 
+            "pane_nr": 0, 
+            "send_enter": 0, 
+            "exec_script": "PORT_SCAN_nmap", 
+            "args": [
+                ""
+            ]
+        }, 
+        "27": {
+            "session_name": "OFFENSIVE_WEB", 
+            "window_name": "0", 
+            "pane_nr": 1, 
+            "send_enter": 0, 
+            "exec_script": "WEBSITE_OFFENSIVE_tplmap", 
+            "args": [
+                ""
+            ]
+        }, 
+        "28": {
+            "session_name": "OFFENSIVE_WEB", 
+            "window_name": "0", 
+            "pane_nr": 2, 
+            "send_enter": 0, 
+            "exec_script": "WEBSITE_OFFENSIVE_sqlmap", 
+            "args": [
+                ""
+            ]
+        }, 
+        "29": {
+            "session_name": "OFFENSIVE_WEB", 
+            "window_name": "0", 
+            "pane_nr": 3, 
+            "send_enter": 0, 
+            "exec_script": "WEBSITE_OFFENSIVE_proxy_server_", 
+            "args": [
+                ""
+            ]
+        }, 
+        "30": {
+            "session_name": "OFFENSIVE_WEB", 
+            "window_name": "0", 
+            "pane_nr": 4, 
+            "send_enter": 0, 
+            "exec_script": "WEBSITE_OFFENSIVE_nuclei_", 
+            "args": [
+                ""
+            ]
+        }, 
+        "31": {
+            "session_name": "BASH", 
+            "window_name": "0", 
+            "pane_nr": 0, 
+            "send_enter": 0, 
+            "exec_script": "", 
+            "args": [
+                ""
+            ]
+        }
+    }
+}
