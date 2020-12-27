@@ -11,7 +11,8 @@ Excuse me for the messy git repo.. #firstproject
 ## Description
 ### Dont use this in a host env. Everything is runned as root.
 
-The initial version of this project will ask you to run everything as <b>root</b>! This is bad practice but it's <b>red-team oriented project</b>.
+The initial version of this project will ask you to run everything as <b>root</b>! 
+This is bad practice but it's <b>red-team oriented project</b>.
 
 This project is ment for lazy people that doesn't like to type things over and over again in cli aplications.
 
@@ -39,5 +40,10 @@ cd dashboard
 sudo ./open_dashboard
 # this will run `write_cfg.py` and `start_dashboard.py`
 sudo ./run_0004.py
-#start dashboard will answer with an interactive session so you can restart a specific tmux session. ALL PROGRESS WILL BE REMOVED AND YOU WILL NOT BE PROMPED!!! 
+# start dashboard will answer with an interactive session.
+# you can restart a specific tmux session.
+# use the index before the session name.
+# or use `a\n` to start all sessions.
+# q for quit
+# ALL PROGRESS WILL BE REMOVED AND YOU WILL NOT BE PROMPED!!! 
 ```
