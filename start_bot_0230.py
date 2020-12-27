@@ -1,5 +1,9 @@
 #!/usr/bin/python3
 
+#importing custom lib:
+import run_0004 as run
+
+
 #import default libs:
 import os
 import time
@@ -7,15 +11,13 @@ import re
 import json
 from pprint import pprint
 
+sleep_short = 0.20
+files = run.get_last_version_of_files('scripts/')
+
 # run as admin.
 if (os.geteuid() != 0):
     print('run as admin')
     os._exit(-1)
-
-#importing custom lib:
-import run_0004 as run
-sleep_short = 0.20
-files = run.get_last_version_of_files('scripts/')
 
 class Session():
     def __init__(self, session_dict, spawn_dir):
