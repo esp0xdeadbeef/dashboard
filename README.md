@@ -46,11 +46,11 @@ cd main
 
 code example:
 
-db.insert({'session_name': "MAIN", 'window_name': "tipl", 'same_pane': True, 'send_enter':1, "pre_arg":"php -a", 'exec_script': 'PHP_code_with_errors', 'args': ['\nexit']})
+db.insert({'session_name': "MAIN", 'window_name': "tutorial", 'same_pane': True, 'send_enter':1, "pre_arg":"php -a", 'exec_script': 'PHP_code_with_errors', 'args': ['\nexit']})
 
 This will make a session MAIN;
 
-creates a window or tab in tmux with the name tipl
+creates a window or tab in tmux with the name tutorial.
 
 The first same pane doesn't matter if true or false, but second command will run in the same pane or not. depending on this variable.
 
