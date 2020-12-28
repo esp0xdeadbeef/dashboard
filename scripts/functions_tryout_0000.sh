@@ -65,4 +65,4 @@ crtshdirsearch(){ #gets all domains from crtsh, runs httprobe and then dir brute
 curl -s https://crt.sh/?q\=%.$1\&output\=json | jq -r '.[].name_value' | sed 's/\*\.//g' | sort -u | httprobe -c 50 | grep https | xargs -n1 -I{} python3 ~/tools/dirsearch/dirsearch.py -u {} -e $2 -t 50 -b 
 }
 
-mscan "--range 10.0.2.0/24"
+#mscan "--range 10.0.2.0/24"
