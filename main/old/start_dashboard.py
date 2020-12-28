@@ -37,6 +37,7 @@ print(write_cfg_location, start_bot_location)
 os.popen("chmod +x \"" + write_cfg_location + "\"").read()
 os.popen("chmod +x \"" + start_bot_location + "\"").read()
 
+
 print(os.popen(write_cfg_location).read())
 exec(open(write_cfg_location).read())
 print("OEF write_cfg") 

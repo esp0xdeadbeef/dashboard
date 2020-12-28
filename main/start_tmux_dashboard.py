@@ -1,8 +1,6 @@
 #!/usr/bin/python3
-
 #importing custom lib:
-import run_0004 as run
-
+import run_latest_version as run
 
 #import default libs:
 import os
@@ -11,45 +9,56 @@ import re
 import json
 from pprint import pprint
 
+#this sleep is used:
+# by making new sessions (sleep_short * 2)
+# by selecting a window, this is really buggy in the tmux api.
+# by sending a file every 200 characters
 sleep_short = 0.20
-files = run.get_last_version_of_files('scripts/')
+sleep_at_chars = 200
+files = run.get_last_version_of_files('../scripts/')
+# tmp_config for reading the config file /tmp/...
+tmp_config = "/tmp/dashboard_tinydb.json"
 
-# run as admin.
-if (os.geteuid() != 0):
-    print('run as admin')
-    os._exit(-1)
+# # run as admin.
+# if (os.geteuid() != 0):
+#     print('run as admin')
+#     os._exit(-1)
 
 class Session():
     def __init__(self, session_dict, spawn_dir):
+        # init of an session
         self.file_content = {}
         self.spawn_dir = spawn_dir
-        #session_dict[0]
         self.make_session(session_dict[0]['session_name'])
         self.current_pane = 0
+        spawned_tabs = {}
         win_pane = {}
         
+        # loop through the session dict
         for counter, row in enumerate(session_dict):
             name = row['window_name']
             self.actual_window_name = name
             if (counter == 0):
                 self.rename_window(name)
-                win_pane[name] = row['pane_nr']
+                # print(row)
+                win_pane[name] = row['same_pane']
             try:
                 #causes an KeyError if not available
                 win_pane[name]
-                if win_pane[name] != row['pane_nr']:
+                if win_pane[name] != row['same_pane']:
                     self.split('v')
                     self.set_mode('even-vertical')
-                win_pane[name] = row['pane_nr']
+                win_pane[name] = row['same_pane']
             except KeyError:
                 self.set_mode()
                 self.new_window(name)
-                win_pane[name] = row['pane_nr']
+                win_pane[name] = row['same_pane']
             
             if row['exec_script'] == '':
                 self.send_keys(' '.join(row['args']), send_enter=row['send_enter'])
             else:
                 self.send_file(row['exec_script'], send_enter=row['send_enter'], args=' '.join(row['args']))
+            print(win_pane)
         self.set_mode('tiled')
         
     
@@ -60,7 +69,6 @@ class Session():
         self.actual_window(name)
     
     def own_os_system(self, cmd):
-        # time.sleep(sleep_short)
         # print(cmd)
         os.system(cmd)
     
@@ -70,9 +78,8 @@ class Session():
         self.own_os_system(output)
     
     def make_session(self, session_name):
-        print('Making session: ' + session_name)
+        print('Making session: ' + session_name + " (manual connect: tmux attach -t " + session_name + ")")
         self.session_name = session_name
-        #print('tmux -2 new-session -d -s ' + session_name)
         self.kill_session()
         self.own_os_system('tmux -2 new-session -d -s ' + session_name)
     
@@ -81,7 +88,7 @@ class Session():
         #print(output)
         self.own_os_system(output)
         
-    
+    # unused function because its not 
     def select_window(self, name):
         #time.sleep(sleep_short)
         self.own_os_system("tmux select-window" + self.dash_t()[:-1] + ":" + name)
@@ -145,7 +152,7 @@ class Session():
         try:
             retval = self.file_content[path]
         except KeyError:
-            with open(path) as file:
+            with open(path, 'r') as file:
                 retval = ''.join(file.readlines())
         self.file_content[path] = retval
         return retval
@@ -154,14 +161,13 @@ class Session():
         #print(filename)
         #file_content = files.get_specific_file(filename)
         file_content = self.get_file_content(filename)
-        #print(file_content)
         file_content_plus_args = file_content + args
         #self.select_pane(self.current_pane)
         content_converted = self.convert_quotes(file_content_plus_args)
         send_counter = 0
         for i in content_converted.split('\n')[:-1]:
             send_counter =+ len(i)
-            if send_counter > 200:
+            if send_counter > sleep_at_chars:
                 #print('sleeping')
                 send_counter = 0
                 time.sleep(sleep_short)
@@ -173,37 +179,47 @@ class Session():
             self.current_pane += 1 
     
 
+# user input function 
+# returns [is_valid_input, is_empty, input value] if executed normaly
+def user_input(input_message):
+    try:
+        ret_val = input(input_message)
+        if ret_val == "":
+            return [True, True, ""]
+        return [True, False, str(ret_val)]
+    except KeyboardInterrupt:
+        return [False, 0, ""]
 
-def run_from__init__(spawn_dir = '/mnt/hgfs/hacking/HTB/academy'):
-    # tinydb for selecting the right order, can be edited to a dict or json.
-    
-    #file = get_file('1_MAIN__init__')
-    file = files.get_specific_file('1_MAIN__init__')
-    db = TinyDB(file)
-    query = Query()
-    sessions_spawned = {}
-    
-    for row in db.all():
-        session_name = row['session_name']
-        try:
-            if sessions_spawned[session_name][0]:
-                continue
-        except KeyError:
-            sessions_spawned[session_name] = [True, db.search(query.session_name == session_name)]
-            actual_db = db.search(query.session_name == session_name)
-            Session(actual_db, spawn_dir)
-        time.sleep(sleep_short * 4)
+def exit_():
+    os.popen('/usr/bin/rm ' + tmp_config)
+    print('\nCya next time ;)', end="")
+    exit(0)
+
+def info():
+    print("This cli will (re)start sessions by the syntax:")
+    print("Type:") 
+    print("\tq - to close program")
+    print("\ta - for spawning all tmux sessions")
+    print("\t-index- for spawning a specific session")
+
+def create_tmp():
+    caller_db = files.get_specific_file('caller_db')
+    # creating a temp file so you dont have to change perms.
+    cp_func = 'cp ' + caller_db + " " + tmp_config
+    os.popen(cp_func).readlines()
+    os.popen("chmod +rw " + tmp_config).readlines()
 
 def interactive_interface(spawn_dir = '/mnt/hgfs/hacking/devel'):
-    file = files.get_specific_file('1_MAIN__init__')
-    db = TinyDB(file)
+    print("This is a program for spawning tmux processes.\n")
+    create_tmp()
+    db = TinyDB(tmp_config)
     query = Query()
     all_records = []
     db_table_default = db.table('_default')
     sections = []
     for i in range(len(db_table_default)):
         session = db_table_default.get(doc_id=i+1)['session_name']
-        # print(str(i) , str(db_table_default.get(doc_id=i+1)))
+        #print(str(i) , str(db_table_default.get(doc_id=i+1)))
         if not (session in sections):
             sections.append(session)
     
@@ -211,36 +227,52 @@ def interactive_interface(spawn_dir = '/mnt/hgfs/hacking/devel'):
     for counter, i in enumerate(sections):
         number_with_sessions.append([counter, i])
     
-    print("Welcome to the program for spawning tmux processes!\n")
-    print("This interface will restart serviceses of your need. (type: `quit or q to close program, type a for spawning all tmux sessions`) ")
+    
     while 1:
         #print(db.search(query.session_name == 'VPN'))
         print("The following sessions are available:")
+        print('--------------------')
         for counter, section in enumerate(sections):
             print(counter, section)
-        selected_input = input("Enter the corresponding number to respawn it: ")
-        if selected_input[0] == 'q':
-            return 0
-        elif selected_input[0] == 'a':
-            run_from__init__(spawn_dir)
+        print('--------------------')
+        info()
+        selected_input = user_input("Enter the corresponding number to respawn it: ")
+        if(selected_input[1]):
+            print("Sorry i didn't understand that.")
+            continue
+        if not(selected_input[0]) or selected_input[2][0] == 'q':
+            exit_()
+        filterd_input_var = selected_input[2]
+        if filterd_input_var[0] == 'a':
+            print('Making all sessions:')
+            for session in sections:
+                session_json = db.search(query.session_name == session)
+                Session(session_json, spawn_dir)
         else:
             try:
-                print("selected: " + sections[int(selected_input)])
-                actual_db = db.search(query.session_name == sections[int(selected_input)])
+                print("Index selected: " + sections[int(filterd_input_var)])
+                actual_db = db.search(query.session_name == sections[int(filterd_input_var)])
                 Session(actual_db, spawn_dir)
-            except Exception as e: print(e)
-        #print(sections)
-        
-        #time.sleep(10)
+                time.sleep(sleep_short * 2)
+            except KeyboardInterrupt:
+                exit_()
+            except ValueError:
+                print("Sorry i didn't understand that.")
+            # except Exception as e: 
+            #     print("an error has accured: " + str(e))
+
 
 if __name__ == "__main__":
     from tinydb import TinyDB, Query
-    path = '/mnt/hgfs/hacking/HTB/unbalanced'
-    tmp_path = input('Path to spawn tmux clients in:')
-    if tmp_path != '':
-        path = tmp_path
-    # import sys
-    # if sys.args[1]
-    interactive_interface(path)
-    #run_from__init__()
-    # print('EOF')
+    path = '/tmp'
+    user_path = user_input('Path to spawn tmux clients in:')
+    if (not(user_path[0])):
+        exit_()
+    else:
+        if not(user_path[1]):
+            path = user_path[2]
+    print('using: ' + path)
+    if (os.path.isdir(path)):
+        interactive_interface(path)
+    print("selected path (" + str(path) + ")")
+    print("doesn't exists. Exiting now.")
