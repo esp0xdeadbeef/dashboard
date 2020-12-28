@@ -9,7 +9,7 @@ Excuse me for the messy git repo.. #firstproject
 - [Usage](#usage)
 
 ## Description
-- ***Tmux ninjas***, This tool will be easy to use!
+- ***This tool will be easy to use for the fellow tmux users***, 
 
 The initial version of this project will ask you to run everything as <b>root</b>! 
 This is bad practice but it's <b>red-team oriented project</b>.
@@ -23,13 +23,14 @@ There are solutions for this like pwntools and pwncat (and many more) but that p
 Spawning tmux session with a main session for your liking. 
 
 In the folder scripts are a few examples how you can use the tmux spawner to spawn some tasks. 
-In the configuration .py 
+In the configuration write_cfg.py you can change the config.
 
 ## Installation
 #### 1. Run the following line in your terminal
 ```bash 
 git clone https://github.com/esp0xdeadbeef/dashboard.git
 cd dashboard
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -53,7 +54,7 @@ creates a window or tab in tmux with the name tipl
 
 The first same pane doesn't matter if true or false, but second command will run in the same pane or not. depending on this variable.
 
-"pre_arg":"php -a" will be executed before the exec_script and is unfilterd, so watch the syntax of tmux.
+"pre_arg":"php -a" will be executed before the exec_script and is unfilterd, so watch the syntax of tmux. there will be an enter appended (\n)
 
 "exec_script" will run the latest version inside the script folder.
   important, you should add version numbering behind the file (filename_XXXX) whereby the XXXX are integers from 0000-9999. (this might be patched after a while)
