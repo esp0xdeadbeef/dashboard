@@ -219,7 +219,7 @@ def create_tmp():
     os.popen(cp_func).readlines()
     os.popen("chmod +rw " + tmp_config).readlines()
 
-def interactive_interface(spawn_dir = '/mnt/hgfs/hacking/devel'):
+def interactive_interface(spawn_dir):
     print("This is a program for spawning tmux processes.\n")
     create_tmp()
     db = TinyDB(tmp_config)
