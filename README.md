@@ -30,6 +30,7 @@ In the configuration .py
 ```bash 
 git clone https://github.com/esp0xdeadbeef/dashboard.git
 cd dashboard
+pip install -r requirements.txt
 ```
 
 ## Usage
