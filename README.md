@@ -42,12 +42,21 @@ cd main
 ./start_tmux_dashboard.py
 ```
 #### edit your own config inside write_cfg.py
+
 code example:
+
 db.insert({'session_name': "MAIN", 'window_name': "tipl", 'same_pane': True, 'send_enter':1, "pre_arg":"php -a", 'exec_script': 'PHP_code_with_errors', 'args': ['\nexit']})
+
 This will make a session MAIN;
+
 creates a window or tab in tmux with the name tipl
+
 The first same pane doesn't matter if true or false, but second command will run in the same pane or not. depending on this variable.
+
 "pre_arg":"php -a" will be executed before the exec_script and is unfilterd, so watch the syntax of tmux.
+
 "exec_script" will run the latest version inside the script folder.
-  importaint, you should add version numbering behind the file (filename_XXXX) whereby the XXXX are integers from 0000-9999. (this might be patched after a while)
+  important, you should add version numbering behind the file (filename_XXXX) whereby the XXXX are integers from 0000-9999. (this might be patched after a while)
+
 "args" array will put the args behind the exec script.
+
