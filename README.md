@@ -14,7 +14,7 @@ Excuse me for the messy git repo.. #firstproject
 The initial version of this project will ask you to run everything as <b>root</b>! 
 This is bad practice but it's <b>red-team oriented project</b>.
 
-This project is ment for lazy people that doesn't like to type things over and over again in cli aplications.
+This project is ment for lazy people that doesn't like to type things over and over again in cli applications.
 
 There are solutions for this like pwntools and pwncat (and many more) but that packages are quite complex to understand without the backend knowledge. (no pun intended)
 
