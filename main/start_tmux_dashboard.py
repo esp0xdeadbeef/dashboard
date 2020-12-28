@@ -16,13 +16,10 @@ from pprint import pprint
 sleep_short = 0.20
 sleep_at_chars = 200
 files = run.get_last_version_of_files('../scripts/')
-# tmp_config for reading the config file /tmp/...
+# tmp_config is needed for the tinydb reader 
+# tinydb reads the db with the open(file, 'a') flag.
+# so its trying to open the file with rw persmissions, this will fail if it is read only.
 tmp_config = "/tmp/dashboard_tinydb.json"
-
-# # run as admin.
-# if (os.geteuid() != 0):
-#     print('run as admin')
-#     os._exit(-1)
 
 class Session():
     def __init__(self, session_dict, spawn_dir):
