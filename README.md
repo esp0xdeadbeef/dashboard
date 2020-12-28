@@ -9,7 +9,7 @@ Excuse me for the messy git repo.. #firstproject
 - [Usage](#usage)
 
 ## Description
-- ***This tool will be easy to use! for the fellow Tmux ninjas***, 
+- ***This tool will be easy to use for the fellow tmux users***, 
 
 The initial version of this project will ask you to run everything as <b>root</b>! 
 This is bad practice but it's <b>red-team oriented project</b>.
