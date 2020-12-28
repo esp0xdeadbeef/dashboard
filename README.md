@@ -23,7 +23,7 @@ There are solutions for this like pwntools and pwncat (and many more) but that p
 Spawning tmux session with a main session for your liking. 
 
 In the folder scripts are a few examples how you can use the tmux spawner to spawn some tasks. 
-In the configuration .py 
+In the configuration write_cfg.py you can change the config.
 
 ## Installation
 #### 1. Run the following line in your terminal
