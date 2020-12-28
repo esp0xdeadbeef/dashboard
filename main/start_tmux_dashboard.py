@@ -54,11 +54,13 @@ class Session():
                 self.new_window(name)
                 win_pane[name] = row['same_pane']
             
+            #dont show change dir
+            #self.send_keys("clear", send_enter = True)
             if row['exec_script'] == '':
                 self.send_keys(row['pre_arg'] + "\n" + ' '.join(row['args']), send_enter=row['send_enter'])
             else:
                 self.send_file(row['exec_script'], send_enter=row['send_enter'], pre_arg = row['pre_arg'], args=' '.join(row['args']))
-            print(win_pane)
+            #print(win_pane)
         self.set_mode('tiled')
         
     
@@ -69,7 +71,7 @@ class Session():
         self.actual_window(name)
     
     def own_os_system(self, cmd):
-        # print(cmd)
+        #print(cmd)
         os.system(cmd)
     
     def set_mode(self, mode = 'tiled'):
@@ -113,12 +115,19 @@ class Session():
         self.send_keys_raw(keys_to_send, send_enter)
     
     def convert_quotes(self, cmd):
-        keys_to_send = cmd.replace('"', "`echo '22' | xxd -p -r`")
-        if r"\`echo '22' | xxd -p -r`" in keys_to_send:
-            #print(keys_to_send)
-            keys_to_send = keys_to_send.replace(r"\`echo '22' | xxd -p -r`", r"\\`echo '22' | xxd -p -r`")
-        keys_to_send = keys_to_send.replace('$', '\$')
-        return keys_to_send
+        filtered_cmd_rows = []
+        for cmd_row in cmd.split('\n'):
+            keys_to_send = ""
+            keys_to_send = cmd_row.replace('"', "`echo '22' | xxd -p -r`")
+            if r"\`echo '22' | xxd -p -r`" in keys_to_send:
+                keys_to_send = keys_to_send.replace(r"\`echo '22' | xxd -p -r`", r"\\`echo '22' | xxd -p -r`")
+            keys_to_send = keys_to_send.replace('$', '\$')
+            #rightsplit last semicolon
+            replace_last = keys_to_send.rsplit(';', 1)
+            keys_to_send = '\;'.join(replace_last)
+            
+            filtered_cmd_rows.append(keys_to_send)
+        return '\n'.join(filtered_cmd_rows)
         
         
     def send_keys_raw(self, cmd, send_enter=False):
@@ -164,6 +173,7 @@ class Session():
         file_content_plus_args = pre_arg + "\n" + file_content + args
         #self.select_pane(self.current_pane)
         content_converted = self.convert_quotes(file_content_plus_args)
+        #print(content_converted)
         send_counter = 0
         for i in content_converted.split('\n')[:-1]:
             send_counter =+ len(i)

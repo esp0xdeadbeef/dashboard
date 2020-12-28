@@ -1,4 +1,4 @@
-while [ 1 ]                                                                                         130 ⨯ 8 ⚙
+while :                                                                                         130 ⨯ 8 ⚙
 do
     ./run_all_without_gui.sh
     sleep 5
