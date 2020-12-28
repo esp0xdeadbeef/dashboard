@@ -19,7 +19,7 @@ with open(file, 'w') as rm_all:
 
 MAIN = "MAIN"
 with TinyDB(file, indent=4, separators=(', ', ': ')) as db:
-    db.insert({'session_name': MAIN, 'window_name': "tutorial", 'same_pane': False, 'send_enter':1, 'exec_script': '', 'args': []})
-    db.insert({'session_name': MAIN, 'window_name': "tutorial", 'same_pane': True, 'send_enter':0, 'exec_script': '', 'args': ['some_args']})
-    db.insert({'session_name': MAIN, 'window_name': "tutorial2", 'same_pane': False, 'send_enter':0, 'exec_script': '', 'args': ['some_args']})
+    db.insert({'session_name': MAIN, 'window_name': "tutorial", 'same_pane': False, 'send_enter':1, "pre_arg":"", 'exec_script': '', 'args': []})
+    db.insert({'session_name': MAIN, 'window_name': "tutorial", 'same_pane': True, 'send_enter':1, 'exec_script': 'Python_code_with_errors', "pre_arg":"python3", 'args': ['string_example)\nexit()']})
+    #db.insert({'session_name': MAIN, 'window_name': "tutorial2", 'same_pane': False, 'send_enter':0, 'exec_script': '', 'args': ['some_args']})
     

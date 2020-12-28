@@ -55,9 +55,9 @@ class Session():
                 win_pane[name] = row['same_pane']
             
             if row['exec_script'] == '':
-                self.send_keys(' '.join(row['args']), send_enter=row['send_enter'])
+                self.send_keys(row['pre_arg'] + "\n" + ' '.join(row['args']), send_enter=row['send_enter'])
             else:
-                self.send_file(row['exec_script'], send_enter=row['send_enter'], args=' '.join(row['args']))
+                self.send_file(row['exec_script'], send_enter=row['send_enter'], pre_arg = row['pre_arg'], args=' '.join(row['args']))
             print(win_pane)
         self.set_mode('tiled')
         
@@ -157,11 +157,11 @@ class Session():
         self.file_content[path] = retval
         return retval
     
-    def send_file(self, filename, send_enter = False, auto_increase = True, args=""):
+    def send_file(self, filename, send_enter = False, auto_increase = True, pre_arg = "", args=""):
         #print(filename)
         #file_content = files.get_specific_file(filename)
         file_content = self.get_file_content(filename)
-        file_content_plus_args = file_content + args
+        file_content_plus_args = pre_arg + "\n" + file_content + args
         #self.select_pane(self.current_pane)
         content_converted = self.convert_quotes(file_content_plus_args)
         send_counter = 0
