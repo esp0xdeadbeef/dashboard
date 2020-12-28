@@ -9,7 +9,7 @@ Excuse me for the messy git repo.. #firstproject
 - [Usage](#usage)
 
 ## Description
-### Dont use this in a host env. Everything is runned as root.
+- ***Tmux ninjas***, This tool will be easy to use!
 
 The initial version of this project will ask you to run everything as <b>root</b>! 
 This is bad practice but it's <b>red-team oriented project</b>.
@@ -18,7 +18,7 @@ This project is ment for lazy people that doesn't like to type things over and o
 
 There are solutions for this like pwntools and pwncat (and many more) but that packages are quite complex to understand without the backend knowledge. (no pun intended)
 
-- ***If you're a Tmux ninja***, this will add another deadly weapon to your agile arsenal  ⚔️  
+
 
 Spawning tmux session with a main session for your liking. 
 
@@ -30,20 +30,14 @@ In the configuration .py
 ```bash 
 git clone https://github.com/esp0xdeadbeef/dashboard.git
 cd dashboard
-
 ```
 
 ## Usage
 #### From the command line:
 ``` bash
-# this will attach the main session of the tmux session.
-sudo ./open_dashboard
-# this will run `write_cfg.py` and `start_dashboard.py`
-sudo ./run_0004.py
-# start dashboard will answer with an interactive session.
-# you can restart a specific tmux session.
-# use the index before the session name.
-# or use `a\n` to start all sessions.
-# q for quit
-# ALL PROGRESS WILL BE REMOVED AND YOU WILL NOT BE PROMPED!!! 
+terminal 1) open the dashboard
+./open_dashboard
+terminal 2) open the cli:
+cd main
+./start_tmux_dashboard.py
 ```
