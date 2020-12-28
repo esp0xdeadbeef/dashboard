@@ -53,7 +53,7 @@ creates a window or tab in tmux with the name tipl
 
 The first same pane doesn't matter if true or false, but second command will run in the same pane or not. depending on this variable.
 
-"pre_arg":"php -a" will be executed before the exec_script and is unfilterd, so watch the syntax of tmux.
+"pre_arg":"php -a" will be executed before the exec_script and is unfilterd, so watch the syntax of tmux. there will be an enter appended (\n)
 
 "exec_script" will run the latest version inside the script folder.
   important, you should add version numbering behind the file (filename_XXXX) whereby the XXXX are integers from 0000-9999. (this might be patched after a while)
