@@ -1,2 +1,4 @@
 ./write_cfg.py && echo "
-a" | ./start_tmux_dashboard.py
+a
+q
+" | ./start_tmux_dashboard.py
