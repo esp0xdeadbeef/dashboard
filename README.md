@@ -28,6 +28,8 @@ In the configuration write_cfg.py you can change the config.
 ## Installation
 #### 1. Run the following line in your terminal
 ```bash 
+# This can be used to generate multiple sessions
+unset $TMUX
 git clone https://github.com/esp0xdeadbeef/dashboard.git
 cd dashboard
 pip install -r requirements.txt
