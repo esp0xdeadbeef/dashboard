@@ -5,7 +5,9 @@ import argparse
 
 
 class get_last_version_of_files():
-    """give the workdir, this function will get all the latest files from format ***_XXXX_**** where the X's are integers. it will take the highest number."""
+    """give the workdir, this function will get all the latest files from
+     format ***_XXXX_**** where the X's are integers. 
+    It will take the highest number."""
 
     def __init__(self, wd):
         self.basepath = wd
