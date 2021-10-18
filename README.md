@@ -14,16 +14,14 @@ Excuse me for the messy git repo.. #firstproject
 The initial version of this project will ask you to run everything as <b>root</b>! 
 This is bad practice but it's <b>red-team oriented project</b>.
 
-This project is ment for lazy people that doesn't like to type things over and over again in cli applications.
+People who do not like to type things over and over again in CLI applications might like this project.
 
-There are solutions for this like pwntools and pwncat (and many more) but that packages are quite complex to understand without the backend knowledge. (no pun intended)
+There are solutions for this like pwntools and pwncat (and many more) that could automate things like i'm trying to do in this project. Those packages are quite complex to understand without the backend knowledge. (no pun intended)
 
 
+In the `scripts` folder are a few examples of how you can use the tmux spawner to spawn some tasks.
 
-Spawning tmux session with a main session for your liking. 
-
-In the folder scripts are a few examples how you can use the tmux spawner to spawn some tasks. 
-In the configuration write_cfg.py you can change the config.
+In the configuration write_cfg.py, you can change the config.
 
 ## Installation
 #### 1. Run the following line in your terminal
@@ -32,7 +30,10 @@ In the configuration write_cfg.py you can change the config.
 unset $TMUX
 git clone https://github.com/esp0xdeadbeef/dashboard.git
 cd dashboard
-pip install -r requirements.txt
+# optional but recommended:
+# python3 -m venv venv
+# source venv/bin/activate
+pip3 install -r requirements.txt
 ```
 
 ## Usage
