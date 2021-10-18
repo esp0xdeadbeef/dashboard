@@ -1,7 +1,5 @@
 
-Excuse me for the messy git repo.. #firstproject 
-
-# dashboard
+# tmux dashboard
 
 ## Table of contents
 - [Description](#description)
