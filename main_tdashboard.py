@@ -10,8 +10,8 @@ import os
 import time
 
 
-# global functions
 def natural_sort(l):
+    # used from  here:
     # https://stackoverflow.com/questions/4836710/is-there-a-built-in-function-for-string-natural-sort
     def convert(text):
         return int(text) if text.isdigit() else text.lower()
