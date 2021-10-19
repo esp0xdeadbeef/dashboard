@@ -61,7 +61,7 @@ def list_potentional_sessions(all_functions):
 
 def renew_session(name,
                   keep_session=False,
-                  start_directory='/mnt/hacking/HTB/'):
+                  start_directory='~'):
     """ 
     Returns an session object
     """
@@ -254,7 +254,8 @@ def panes_from_list(session,
                     keys_to_send_list,
                     send_enter=True,
                     debugging=False,
-                    all_unchecked=True):
+                    all_unchecked=True,
+                    start_directory=None):
     for i in keys_to_send_list:
         if all_unchecked:
             keys = f"# skip check comming = 99999 #all unchecked \n{i}"
@@ -270,7 +271,10 @@ def panes_from_list(session,
         )
         session.attached_window.select_layout('tiled')
         if keys_to_send_list[-1] != i:
-            session.attached_pane.split_window(attach=True)
+            session.attached_pane.split_window(
+                attach=True,
+                start_directory=start_directory
+            )
     session.attached_window.select_layout('tiled')
 
 
@@ -331,7 +335,7 @@ def at_end(pane,
     """
 exercise_pane = server.find_where({'session_name': 'main'})
 pane = exercise_pane.attached_pane
-at_end(pane, time_out=1, debugging=True,       send_enter_to_check_if_interpreter=True)
+at_end(pane, time_out=1, debugging=True, send_enter_to_check_if_interpreter=True)
     """
 
     global interpreters
@@ -359,10 +363,6 @@ at_end(pane, time_out=1, debugging=True,       send_enter_to_check_if_interprete
                 if debugging:
                     print('Interpreter is in pane and in the right position.')
                 return True
-    # if len(pane_c[:-1].split(' ')) > 3:
-    #     if debugging:
-    #         print('Too much spaces to be an interpreter')
-    #     return False
 
     if debugging:
         print(f"new potentional interpreter {pane_c}", interpreters)
@@ -513,13 +513,6 @@ def s_all(respawn_all=True):
         exec(f'{name}_pane = name_pane') in globals(), locals()
 
 
-def arg_as_list(s):
-    v = ast.literal_eval(s)
-    if type(v) is not list:
-        raise argparse.ArgumentTypeError("Argument \"%s\" is not a list" % (s))
-    return v
-
-
 def parse_args():
     default_interpreters = [
         '>',
@@ -541,8 +534,9 @@ def parse_args():
     parser.add_argument(
         "--additional-interpreters",
         nargs='+',
+        action='append',
         type=str,
-        help="List of values"
+        help="List of interpreters"
     )
     var = False
     parser.add_argument(
@@ -569,7 +563,7 @@ if not used,
         for i in args.additional_interpreters:
             if i == '':
                 continue
-            args.interpreters.append(i)
+            [args.interpreters.append(j) for j in i]
     return args
 
 
