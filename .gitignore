@@ -2,3 +2,4 @@
 scripts_hack_the_box/
 scripts_OSCP/
 venv/
+__pycache__/
