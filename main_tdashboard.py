@@ -148,7 +148,7 @@ def send_keys_to_pane(pane,
                       wait_untill_string="# wait_untill=",
                       safe_last_output_to_file="# safe_last_output_to_file=",
                       bg_task_in_pane="# background task in pane",
-                      send_enter_last_row=True,
+                      send_enter_last_row=False,
                       debugging=False):
     """
 exercise_pane = server.find_where({'session_name': 'test'})
@@ -156,18 +156,16 @@ pane = exercise_pane.attached_pane
 send_keys_to_pane(pane, get_file_content(all_files["test"]))
     """
     unchecked = 0
-    send_enter = True
     content = script_content.split('\n')
 
     last_row_send = ""
     for counter, row_to_send in enumerate(content):
+        send_enter = counter != (len(content) - 1) and send_enter_last_row
         if debugging:
             print("{send_keys_to_pane}", end=", ")
             print(f"row_to_send = {row_to_send}", end="; ")
             print(f"unchecked = {str(unchecked)}", end="; ")
             print(f"send_enter = {str(send_enter)}")
-        if counter == (len(content) - 1) and not(send_enter_last_row):
-            send_enter = False
         if in_file_exec_function in row_to_send:
             exec_function = row_to_send.split(in_file_exec_function)[1]
             exec(exec_function) in globals(), locals()
@@ -232,7 +230,8 @@ send_keys_to_pane(pane, get_file_content(all_files["test"]))
                         row_to_send,
                         last_row_send,
                         time_out=time_out_checked,
-                        send_enter=send_enter,
+                        # send_enter_last_row=send_enter,
+                        # send_enter=send_enter,
                         debugging=debugging
                         )
             last_row_send = row_to_send
@@ -254,6 +253,7 @@ def wait_untill_msg(pane,
 def panes_from_list(session,
                     keys_to_send_list,
                     send_enter=True,
+                    debugging=False,
                     all_unchecked=True):
     for i in keys_to_send_list:
         if all_unchecked:
@@ -264,7 +264,9 @@ def panes_from_list(session,
             session.attached_pane,
             keys,
             time_out_unchecked=0,
-            send_enter_last_row=send_enter
+            send_enter_last_row=send_enter,
+            debugging=debugging,
+
         )
         session.attached_window.select_layout('tiled')
         if keys_to_send_list[-1] != i:
@@ -327,10 +329,9 @@ def at_end(pane,
            debugging=False,
            send_enter_to_check_if_interpreter=True):
     """
-exercise_pane = server.find_where({'session_name': 'exercise'})
+exercise_pane = server.find_where({'session_name': 'main'})
 pane = exercise_pane.attached_pane
-at_end(pane, time_out=1, debugging=True,
-       send_enter_to_check_if_interpreter=True)
+at_end(pane, time_out=1, debugging=True,       send_enter_to_check_if_interpreter=True)
     """
 
     global interpreters
@@ -358,14 +359,10 @@ at_end(pane, time_out=1, debugging=True,
                 if debugging:
                     print('Interpreter is in pane and in the right position.')
                 return True
-            if len(interpreter) > 1:
-                if debugging:
-                    print(f'len({interpreter}) > 1')
-                return False
-    if len(pane_c.split(' ')) > 3:
-        if debugging:
-            print('Too much spaces to be an interpreter')
-        return False
+    # if len(pane_c[:-1].split(' ')) > 3:
+    #     if debugging:
+    #         print('Too much spaces to be an interpreter')
+    #     return False
 
     if debugging:
         print(f"new potentional interpreter {pane_c}", interpreters)
@@ -443,7 +440,7 @@ def interactive_dashboard(session_functions, debugging):
         if id == "quit" or id == "exit":
             exit()
             break
-        if debugging != "":
+        if not(debugging):
             os.system('clear')
         print('id to spawn or name to spawn: ' + id)
         if "all" == id or "a" == id:
@@ -538,7 +535,7 @@ def parse_args():
     parser.add_argument(
         "--session-file",
         help="configuration file, check the scripts directory if you dont know how to make one.",
-        default="/home/deadbeef/Documents/github/dashboard/scripts/1_session.py",
+        default="scripts/1_session.py",
         type=str
     )
     parser.add_argument(
@@ -547,7 +544,7 @@ def parse_args():
         type=str,
         help="List of values"
     )
-    var = True
+    var = False
     parser.add_argument(
         '-i',
         '--interactive',
@@ -594,7 +591,7 @@ if __name__ == '__main__':
     if args.interactive:
         interactive_dashboard(
             session_functions,
-            debugging=False
+            debugging=True
         )
     else:
         all_files = get_dir_session_files(args.scripts)
