@@ -148,7 +148,7 @@ def send_keys_to_pane(pane,
                       wait_untill_string="# wait_untill=",
                       safe_last_output_to_file="# safe_last_output_to_file=",
                       bg_task_in_pane="# background task in pane",
-                      send_enter_last_row=False,
+                      send_enter_last_row=True,
                       debugging=False):
     """
 exercise_pane = server.find_where({'session_name': 'test'})
