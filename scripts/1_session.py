@@ -42,15 +42,6 @@ Everything that starts with spawn_ will be regonised by the dashboard spawner.
                     )
     wait_untill_msg(main_session.attached_pane, 'logout')
     main_session.new_window()
-    main_session.attached_window.rename_window('tryout')
-    panes_from_list(main_session,
-                    [
-                        get_file_content(all_files["functions_tryout"])
-                    ],
-                    send_enter=False,
-                    all_unchecked=False
-                    )
-    main_session.new_window()
     main_session.attached_window.rename_window('vim? :O')
     edit_a_test_file_with_vim = """vim /tmp/testing
 i
