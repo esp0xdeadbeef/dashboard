@@ -45,10 +45,11 @@ pip3 install -r requirements.txt
 
 option 1 open tmux:
 ```bash
-export dashboard_path="/opt/dashboard"
+export dashboard_path="/tmp/dashboard"
 pip3 install -r $dashboard_path/requirements.txt
-ipython3 $dashboard_path/main_tdashboard.py -i -- $dashboard_path/scripts_hack_the_box/ --session-file $dashboard_path/scripts_hack_the_box/1_session.py"
+ipython3 $dashboard_path/main_tdashboard.py -i -- $dashboard_path/scripts --session-file $dashboard_path/scripts/1_session.py
 ```
+
 
 ```bash
 terminal 2) open the cli (option 2):
