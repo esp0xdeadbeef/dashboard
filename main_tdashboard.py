@@ -67,14 +67,20 @@ def renew_session(name,
     """
     if not(isinstance(name, str)):
         raise "use with name is a str obj"
-    s = server.find_where({"session_name": name})
+    session = server.find_where({"session_name": name})
     if keep_session:
-        return s
-    if s != None:
-        s.kill_session()
-    session = server.new_session(name,
-                                 start_directory=start_directory)
-
+        return session
+    if session != None:
+        session.kill_session()
+    try:
+        # somehow it will give an key error on arch, and return None in session.
+        session = server.new_session(name,
+                                     start_directory=start_directory)
+    except ValueError:
+        pass
+    if session is None:
+        # specialy for arch:
+        session = server.find_where({"session_name": name})
     return session
 
 
