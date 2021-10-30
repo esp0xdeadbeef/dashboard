@@ -65,7 +65,7 @@ then
 fi
 source $dashboard_path/venv/bin/activate
 pip3 install -r $dashboard_path/requirements.txt
-ipython3 $dashboard_path/main_tdashboard.py -i -- $scripts_path --session-file $dashboard_path/scripts/1_session.py" C-m
+ipython3 $dashboard_path/main_tdashboard.py -i -- $scripts_path --session-file $scripts_path/1_session.py" C-m
 '
 #and use:
 spawn-tmux-session
