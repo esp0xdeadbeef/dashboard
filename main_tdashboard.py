@@ -124,7 +124,7 @@ def get_output(pane,
                location="/tmp/tmux_output.txt",
                debugging=False,
                sleep_time=0.2,
-               max_size=999999999
+               max_size=10**10000
                ):
 
     res = pane_capture(pane, size=max_size)
@@ -243,6 +243,7 @@ send_keys_to_pane(pane, get_file_content(all_files["test"]))
             last_row_send = row_to_send
             if debugging:
                 print("Checked.")
+    
 
 
 def wait_untill_msg(pane,
@@ -361,6 +362,8 @@ at_end(pane, time_out=1, debugging=True, send_enter_to_check_if_interpreter=True
                 print(f'"{i}" == "{pane_c}"')
             return False
 
+    if debugging:
+        print('send-keys', '-N', f'{len(string.ascii_lowercase * 2)}', 'C-?')
     pane.cmd('send-keys', '-N', f'{len(string.ascii_lowercase * 2)}', 'C-?')
 
     for interpreter in interpreters:
