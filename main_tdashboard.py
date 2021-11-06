@@ -124,23 +124,26 @@ def get_output(pane,
                location="/tmp/tmux_output.txt",
                debugging=False,
                sleep_time=0.2,
-               max_size=10**10000
+               max_size=10**8
                ):
 
     res = pane_capture(pane, size=max_size)
-    time.sleep(sleep_time)
 
     if not(last_command == "dump_all"):
         for counter, i in enumerate(res[::-1]):
             if last_command in i:
                 res = res[(len(res) - counter - 1):]
+                if debugging:
+                    print(f'Breaking because found {last_command}')
                 break
     if debugging:
         print(f'writing file {location}, from keyword {last_command}')
     with open(location, 'w') as f:
         f.write('\n'.join(res))
     if debugging:
-        print("wc output: " + os.popen('wc ' + location).read())
+        print(f"len of res: {len(res)}")
+        with os.popen('wc ' + location) as f:
+            print("wc output: " + f.read())
     return res
 
 
@@ -243,7 +246,6 @@ send_keys_to_pane(pane, get_file_content(all_files["test"]))
             last_row_send = row_to_send
             if debugging:
                 print("Checked.")
-    
 
 
 def wait_untill_msg(pane,
@@ -301,22 +303,24 @@ def pane_capture(pane,
         len_cmd = "tmux capture-pane -t " + \
             pane.session.name + " -p -S -" + str(size + 2)
         while res == []:
-            res = os.popen(res_cmd).read()[:-1].split('\n')
-        if raw:
-            return res
-        len_ = os.popen(len_cmd).read()[:-1].split('\n')
-        if len(res) == len(len_):
-            for counter, i in enumerate(res[::-1]):
-                if i != '':
-                    break
-            if counter != 0:
-                reshape_to_no_spaces_at_back = (counter * -1)
-                if debugging:
-                    print(f"res before reshap: {res}")
-                res = res[:reshape_to_no_spaces_at_back]
-                if debugging:
-                    print(
-                        f"len(res): {len(res)}, len(len_): {len(len_)}, res: {res}, counter: {counter}")
+            with os.popen(res_cmd) as p:
+                res = p.read()[:-1].split('\n')
+    if raw:
+        return res
+    len_ = os.popen(len_cmd).read()[:-1].split('\n')
+    if len(res) == len(len_):
+        for counter, i in enumerate(res[::-1]):
+            if i != '':
+                break
+        if counter != 0:
+            reshape_to_no_spaces_at_back = (counter * -1)
+            if debugging:
+                dbg = f"res before reshap: {res}"
+                print(dbg)
+            res = res[:reshape_to_no_spaces_at_back]
+            if debugging:
+                dbg = f"len(res): {len(res)}, len(len_): {len(len_)}, res: {res}, counter: {counter}"
+                print(dbg)
 
     return res
 
