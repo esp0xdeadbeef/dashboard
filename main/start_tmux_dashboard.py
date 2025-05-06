@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # importing custom lib:
 import run_latest_version as run
 
