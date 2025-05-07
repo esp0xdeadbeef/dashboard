@@ -1,4 +1,4 @@
 # personal scripts from esp0xdeadbeef:
-scripts_hack_the_box/
-scripts_OSCP/
+personal_scripts/
 venv/
+__pycache__/
