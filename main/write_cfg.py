@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 
-import os
-if (os.geteuid() != 0):
-    print('run as admin')
-    os._exit(-1)
-
 from tinydb import TinyDB, Query
 from pprint import pprint
 import run_latest_version as run

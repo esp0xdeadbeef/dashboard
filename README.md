@@ -1,9 +1,6 @@
-<<<<<<< HEAD
+WIP.
 
-# tmux dashboard
-=======
-# dashboard
->>>>>>> dev
+# dashboard in tmux
 
 ## Table of contents
 - [Description](#description)
@@ -36,12 +33,11 @@ In the configuration write_cfg.py, you can change the config.
 ```bash 
 # This can be used to generate multiple sessions
 unset $TMUX
-cd /opt
-git clone -b dev https://github.com/esp0xdeadbeef/dashboard.git
+cd /tmp
+git clone https://github.com/esp0xdeadbeef/dashboard.git
 cd dashboard
-# optional but recommended:
-# python3 -m venv venv
-# source venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip3 install -r requirements.txt
 ```
 
