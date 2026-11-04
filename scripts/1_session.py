@@ -1,4 +1,6 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
+# `compat` is provided by the dashboard: session files are exec'd into its
+# globals, so the compat helpers are already in scope here.
 
 
 def spawn_main():
@@ -10,7 +12,7 @@ Everything that starts with spawn_ will be regonised by the dashboard spawner.
         # keep_session=True,
         # start_directory="/tmp/"
     )
-    main_session.attached_window.rename_window('programming')
+    compat.rename_window(compat.active_window(main_session), 'programming')
     php = 'php -a\n' + \
         get_file_content(all_files["PHP_code_with_errors"]) + '\nexit'
     python = 'ipython3\n' + \
@@ -29,7 +31,7 @@ Everything that starts with spawn_ will be regonised by the dashboard spawner.
                     start_directory='~/../'
                     )
     main_session.new_window()
-    main_session.attached_window.rename_window('socat')
+    compat.rename_window(compat.active_window(main_session), 'socat')
     socat_v = "sleep 5\nsocat exec:'bash -li',pty,stderr,setsid,sigint,sane tcp:localhost:6666\n"
     socat_a = 'socat file:$(tty),raw,echo=0 tcp-listen:6666\n\nwhoami\nls -la\ncd /\nexit\n'
     panes_from_list(main_session,
@@ -40,9 +42,9 @@ Everything that starts with spawn_ will be regonised by the dashboard spawner.
                     send_enter=True,
                     all_unchecked=True
                     )
-    wait_untill_msg(main_session.attached_pane, 'logout')
+    wait_untill_msg(compat.active_pane(main_session), 'logout')
     main_session.new_window()
-    main_session.attached_window.rename_window('vim? :O')
+    compat.rename_window(compat.active_window(main_session), 'vim? :O')
     edit_a_test_file_with_vim = """vim /tmp/testing
 i
 testing :D 
@@ -54,11 +56,11 @@ testing :D
                     ],
                     all_unchecked=True
                     )
-    main_session.cmd('send-keys', 'Escape')
-    main_session.cmd('send-keys', ':wq!\n')
-    while not(at_end(main_session.attached_pane)):
+    compat.send_keys(compat.active_pane(main_session), 'Escape')
+    compat.send_keys(compat.active_pane(main_session), ':wq!\n')
+    while not(at_end(compat.active_pane(main_session))):
         pass
-    main_session.cmd('send-keys', 'cat /tmp/testing\n')
+    compat.send_keys(compat.active_pane(main_session), 'cat /tmp/testing\n')
 
 
 if __name__ == "__main__":

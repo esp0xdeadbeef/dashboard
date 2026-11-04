@@ -1,13 +1,36 @@
-#!/usr/bin/ipython3
-import ast
-import json
+#!/usr/bin/env python3
 import argparse
 import string
 import sys
 import re
-import libtmux
+import subprocess
 import os
 import time
+
+import libtmux
+
+import compat
+import termstate
+
+
+def run(cmd_args, check=True, capture=True):
+    """Run a command as an argument list (never a shell string).
+
+    Replaces the original os.popen()/os.system() calls, which concatenated
+    paths into a shell command and swallowed all errors.
+    """
+    result = subprocess.run(
+        cmd_args,
+        capture_output=capture,
+        text=True,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(
+            f"command failed ({result.returncode}): {' '.join(cmd_args)}"
+            + (f"\nstderr: {result.stderr}" if result.stderr else "")
+        )
+    return result
 
 
 def natural_sort(l):
@@ -35,12 +58,14 @@ def get_scripts_location(path):
 
 
 def get_dir_session_files(scripts_location, session_name=None):
-    if session_name:
-        cmd = f"ls -vA " + scripts_location + " | grep " + session_name
-    else:
-        cmd = f"ls -vA " + scripts_location
-    os_ex = os.popen(cmd).read().split()
+    if not os.path.isdir(scripts_location):
+        raise FileNotFoundError(
+            f"scripts directory not found: {scripts_location}")
+    cmd = ["ls", "-vA", scripts_location]
+    os_ex = run(cmd).stdout.split()
     files = [i for i in os_ex if i]
+    if session_name:
+        files = [i for i in files if session_name in i]
 
     files_to_get = {}
 
@@ -65,29 +90,28 @@ def renew_session(name,
     """ 
     Returns an session object
     """
-    if not(isinstance(name, str)):
-        raise "use with name is a str obj"
-    session = server.find_where({"session_name": name})
+    if not isinstance(name, str):
+        raise TypeError("name must be a str")
+    session = compat.get_session(server, name)
     if keep_session:
         return session
-    if session != None:
-        session.kill_session()
+    if session is not None:
+        compat.kill_session(session)
     try:
-        # somehow it will give an key error on arch, and return None in session.
         session = server.new_session(name,
                                      start_directory=start_directory)
     except ValueError:
         pass
     if session is None:
-        # specialy for arch:
-        session = server.find_where({"session_name": name})
+        # some tmux versions report an otherwise-successful creation here.
+        session = compat.get_session(server, name)
     return session
 
 
 def background_task_in_pane(pane,
                             wait_time=0.5,
                             debugging=False):
-    pane.cmd('send-keys', 'C-z')
+    compat.send_keys(pane, 'C-z')
     wait_time_total = 0
     backgrounded_task = False
     interpreter = False
@@ -113,9 +137,9 @@ def background_task_in_pane(pane,
         time.sleep((wait_time / 10))
     if backgrounded_task:
         time.sleep(1)
-        pane.cmd('send-keys', 'y')
+        compat.send_keys(pane, 'y')
         time.sleep(1)
-        pane.cmd('send-keys', "Enter")
+        compat.send_keys(pane, "Enter")
         time.sleep(1)
 
 
@@ -142,8 +166,7 @@ def get_output(pane,
         f.write('\n'.join(res))
     if debugging:
         print(f"len of res: {len(res)}")
-        with os.popen('wc ' + location) as f:
-            print("wc output: " + f.read())
+        print("wc output: " + run(["wc", location]).stdout)
     return res
 
 
@@ -160,8 +183,8 @@ def send_keys_to_pane(pane,
                       send_enter_last_row=True,
                       debugging=False):
     """
-exercise_pane = server.find_where({'session_name': 'test'})
-pane = exercise_pane.attached_pane
+exercise_pane = compat.require_session(server, 'test')
+pane = compat.active_pane(exercise_pane)
 send_keys_to_pane(pane, get_file_content(all_files["test"]))
     """
     unchecked = 0
@@ -217,16 +240,16 @@ send_keys_to_pane(pane, get_file_content(all_files["test"]))
 
             continue
         if row_to_send == "":
-            pane.cmd("send-keys", row_to_send)
+            compat.send_keys(pane, row_to_send)
             if send_enter:
-                pane.cmd("send-keys", "C-m")
+                compat.send_keys(pane, "C-m")
                 time.sleep(time_out_unchecked)
             if debugging:
                 print('Unchecked, it\'s empty.')
         elif unchecked > 0:
-            pane.cmd("send-keys", row_to_send)
+            compat.send_keys(pane, row_to_send)
             if send_enter:
-                pane.cmd("send-keys", "C-m")
+                compat.send_keys(pane, "C-m")
                 time.sleep(time_out_unchecked)
             if debugging:
                 print('Unchecked, requested by user.')
@@ -265,26 +288,33 @@ def panes_from_list(session,
                     debugging=False,
                     all_unchecked=True,
                     start_directory=None):
+    # Session.active_window / active_pane return freshly-queried objects, but
+    # splitting with attach=True makes libtmux's cached window handle stale
+    # ("can't find window: @N"), so re-resolve the session each iteration.
+    def fresh():
+        return compat.require_session(
+            compat.reconnect(session.server), session.session_name)
+
     for i in keys_to_send_list:
         if all_unchecked:
             keys = f"# skip check comming = 99999 #all unchecked \n{i}"
         else:
             keys = i
+        cur = fresh()
         send_keys_to_pane(
-            session.attached_pane,
+            compat.active_pane(cur),
             keys,
             time_out_unchecked=0,
             send_enter_last_row=send_enter,
             debugging=debugging,
 
         )
-        session.attached_window.select_layout('tiled')
+        compat.select_layout_for(fresh(), session.session_name, 'tiled')
         if keys_to_send_list[-1] != i:
-            session.attached_pane.split_window(
-                attach=True,
-                start_directory=start_directory
-            )
-    session.attached_window.select_layout('tiled')
+            compat.split_pane(fresh(), session.session_name,
+                              attach=True,
+                              start_directory=start_directory)
+    compat.select_layout_for(fresh(), session.session_name, 'tiled')
 
 
 def pane_capture(pane,
@@ -298,16 +328,16 @@ def pane_capture(pane,
         res = pane.cmd('capture-pane', '-p',
                        '-S',  "-" + str(size)).stdout
     else:
-        res_cmd = "tmux capture-pane -t " + \
-            pane.session.name + " -p -S -" + str(size)
-        len_cmd = "tmux capture-pane -t " + \
-            pane.session.name + " -p -S -" + str(size + 2)
+        res_cmd = ["tmux", "capture-pane", "-t", pane.session.name,
+                   "-p", "-S", "-" + str(size)]
+        len_cmd = ["tmux", "capture-pane", "-t", pane.session.name,
+                   "-p", "-S", "-" + str(size + 2)]
         while res == []:
-            with os.popen(res_cmd) as p:
-                res = p.read()[:-1].split('\n')
+            out = run(res_cmd).stdout
+            res = out[:-1].split('\n') if out else []
     if raw:
         return res
-    len_ = os.popen(len_cmd).read()[:-1].split('\n')
+    len_ = run(len_cmd).stdout[:-1].split('\n')
     if len(res) == len(len_):
         for counter, i in enumerate(res[::-1]):
             if i != '':
@@ -336,78 +366,33 @@ def send_file_to_pane(pane, file_name, skip_checking=False):
 
 
 def get_attached_pane(server, session_name="main"):
-    return server.find_where({'session_name': session_name}).attached_pane
+    return compat.active_pane(compat.require_session(server, session_name))
 
 
-def at_end(pane,
-           time_out=1,
-           debugging=False,
+def at_end(pane, time_out=1, debugging=False,
            send_enter_to_check_if_interpreter=True):
+    """True when the program in `pane` is blocked waiting for terminal input.
+
+    Previous implementation typed 52 characters of junk into the pane, erased
+    them, sent C-m, and compared the screen against a global list of
+    remembered "interpreter" strings. That failed on the cases that matter
+    (silent readers like smbclient/mysql print nothing to match; remote shells
+    have arbitrary prompts; msfconsole is never "the shell") and it mutated
+    the pane it was measuring.
+
+    This asks the kernel instead: find the process that owns the pane's tty,
+    then check whether it is blocked in a read. No keystrokes are sent.
+
+    The arguments after `pane` are kept for call-site compatibility with the
+    old probing version and are ignored.
     """
-exercise_pane = server.find_where({'session_name': 'main'})
-pane = exercise_pane.attached_pane
-at_end(pane, time_out=1, debugging=True, send_enter_to_check_if_interpreter=True)
-    """
-
-    global interpreters
-    no_interpreters = [string.ascii_lowercase, "'", '"', "|", ',', ';']
-
+    target = pane.pane_id if hasattr(pane, "pane_id") else str(pane)
+    state = termstate.pane_state(target)
     if debugging:
-        print('{at_end}', end="; ")
-    pane_c = pane_capture(pane)[-1]
-    if pane_c == "":
-        if debugging:
-            print(f'"{pane_c}" == ""')
-        return False
-
-    for i in no_interpreters:
-        if i in pane_c:
-            if debugging:
-                print(f'"{i}" == "{pane_c}"')
-            return False
-
-    if debugging:
-        print('send-keys', '-N', f'{len(string.ascii_lowercase * 2)}', 'C-?')
-    pane.cmd('send-keys', '-N', f'{len(string.ascii_lowercase * 2)}', 'C-?')
-
-    for interpreter in interpreters:
-        if interpreter in pane_c:
-            if interpreter == pane_c or interpreter == pane_c[:-1]:
-                if debugging:
-                    print('Interpreter is in pane and in the right position.')
-                return True
-
-    if debugging:
-        print(f"new potentional interpreter {pane_c}", interpreters)
-    if debugging:
-        print('{at_end}', end="; ")
-    pane.cmd('send-keys', string.ascii_lowercase)
-    time.sleep(time_out)
-    last_call = "".join(pane_capture(
-        pane))[-len(string.ascii_lowercase):]
-    if not(string.ascii_lowercase in last_call):
-        if debugging:
-            print("at_end: False {not(ascii_letters in " + last_call + ")")
-        pane.cmd('send-keys', '-N', f'{len(string.ascii_lowercase)}', 'C-?')
-        return False
-
-    pane.cmd('send-keys', '-N', f'{len(string.ascii_lowercase)}', 'C-?')
-    time.sleep(time_out)
-    if send_enter_to_check_if_interpreter:
-        if debugging:
-            print("Sending an enter to double check.")
-        pane.cmd('send-keys', 'C-m')
-        time.sleep(time_out)
-    if pane_capture(pane)[-1] == pane_c:
-        if debugging:
-            print(
-                f'at_end added {pane_c} to the interpreters ({interpreters})')
-        interpreters.append(pane_c)
-        return True
-    else:
-        if debugging:
-            print("at_end: Didn't catch the same cli.")
-        return False
+        print(f"{{at_end}} {termstate.describe(target)}")
+    # ready = the tty owner wants input. safe_to_send additionally keeps a
+    # command line out of a password / pager / yes-no prompt.
+    return state.ready and state.safe_to_send
 
 
 def checked_cmd(pane,
@@ -433,8 +418,8 @@ def checked_cmd(pane,
         if debugging:
             print('{checked_cmd} sleeping at_end = False')
         time.sleep(time_out)
-    pane.cmd("send-keys", row_to_send)
-    pane.cmd("send-keys", "C-m")
+    compat.send_keys(pane, row_to_send)
+    compat.send_keys(pane, "C-m")
     time.sleep(time_out)
 
 
@@ -454,7 +439,7 @@ def interactive_dashboard(session_functions, debugging):
             exit()
             break
         if not(debugging):
-            os.system('clear')
+            run(['clear'], check=False, capture=False)
         print('id to spawn or name to spawn: ' + id)
         if "all" == id or "a" == id:
             for i in session_functions:
@@ -469,9 +454,16 @@ def interactive_dashboard(session_functions, debugging):
             if id in spawn:
                 call_direct = session_functions[counter]
                 break
-        exec_function = f"{call_direct}()"
         if call_direct == "":
-            exec_function = session_functions[int(id)] + '()'
+            # Bare number selects by index; anything else is a typo. The
+            # original called int(id) unconditionally here, which raised
+            # ValueError for out-of-range or non-numeric input.
+            if not id.isdigit() or int(id) >= len(session_functions):
+                print(f"no session matches {id!r}; try a number 0-"
+                      f"{len(session_functions) - 1} or a name")
+                continue
+            call_direct = session_functions[int(id)]
+        exec_function = f"{call_direct}()"
         print(exec_function)
         exec(exec_function)
 
@@ -501,28 +493,28 @@ def s_all(respawn_all=True):
         name = f"{session_function.split('_')[-1]}"
         func = f"{session_function}()"
         if respawn_all:
-            name_pane = renew_session(
+            name_pane = compat.active_pane(renew_session(
                 name,
                 keep_session=True
-            ).attached_pane
+            ))
 
             print(f'Starting {func}')
             exec(func) in globals(), locals()
         else:
             print(f"Trying to get active_pane of {name}")
             try:
-                name_pane = server.find_where(
-                    {"session_name": name}).attached_pane
+                name_pane = compat.active_pane(
+                    compat.require_session(server, name))
                 pane_name_as_var = f'global {name}_pane; {name}_pane = name_pane'
                 exec(pane_name_as_var) in globals(), locals()
                 continue
             except AttributeError:
                 print(f'Starting {func} because its not spawned yet')
                 exec(func) in globals(), locals()
-                name_pane = renew_session(
+                name_pane = compat.active_pane(renew_session(
                     name,
                     keep_session=True
-                ).attached_pane
+                ))
         exec(f'{name}_pane = name_pane') in globals(), locals()
 
 
@@ -580,20 +572,38 @@ if not used,
     return args
 
 
-if __name__ == '__main__':
-    # set the maximum depth as 1500
+def main():
+    global interpreters, server, all_files, args
     sys.setrecursionlimit(15000)
+
+    # Refuse root before touching tmux: a tmux server is per-user, so a
+    # root-run dashboard spawns into a different server and leaves root-owned
+    # files behind. See AGENTS.md, "Run as a normal user".
+    try:
+        compat.assert_not_root()
+        compat.assert_env_sane()
+        compat.check_libtmux_version()
+    except compat.CompatError as exc:
+        print(f"dashboard: {exc}", file=sys.stderr)
+        return 2
+
     args = parse_args()
     interpreters = args.interpreters
-    server = libtmux.Server()
+    server = connect_server()
     location = args.session_file
 
+    # The session file is exec'd into module globals (not main()'s locals) so
+    # that (a) spawn_* functions defined there become module-level names the
+    # spawner can find, and (b) `dir()` below sees them. exec'ing into locals
+    # would hide them from both.
     user_functionality = get_file_content(location).\
         rsplit('if __name__ == "__main__":', -1)[0]
-    exec(user_functionality)
+    exec(compile(user_functionality, location, "exec"), globals())
 
+    # dir(globals()) would list dict's own attributes; the spawn_* names live
+    # in the dict itself, so pass the mapping's keys.
     session_functions = natural_sort(
-        list_potentional_sessions(dir())
+        list_potentional_sessions(globals())
     )
     if args.interactive:
         interactive_dashboard(
@@ -607,7 +617,33 @@ if __name__ == '__main__':
     for session_function in session_functions:
         name = f"{session_function.split('_')[-1]}"
         named_pane = name + "_pane"
-        session_struct = {'session_name': name}
-        full_command = f"{named_pane} = server.find_where({session_struct}).attached_pane"
-        exec(full_command)
-    # interactive ipython3 session.
+        session = compat.get_session(server, name)
+        if session is None:
+            continue
+        globals()[named_pane] = compat.active_pane(session)
+
+    # Leftover REPL for convenience: `python3 -i main_tdashboard.py ...`
+    # exposes the pane_<name> variables bound above. Use plain `-i`, not
+    # ipython: the original `#!/usr/bin/ipython3` shebang does not exist on
+    # most systems and added a hard dependency for no gain.
+    return 0
+
+
+def connect_server():
+    """Connect to this user's tmux server, with a clear error if absent."""
+    try:
+        return compat.connect()
+    except Exception as exc:
+        raise compat.CompatError(
+            f"cannot reach the tmux server: {exc}\n"
+            f"Start one as your normal user first (run `tmux`), and make sure "
+            f"you are not inside an su/sudo shell."
+        ) from exc
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except compat.CompatError as exc:
+        print(f"dashboard: {exc}", file=sys.stderr)
+        sys.exit(2)

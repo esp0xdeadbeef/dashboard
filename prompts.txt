@@ -1,0 +1,88 @@
+# Known interactive prompts, as data.
+#
+# Format: tab-separated, one prompt per line.
+#   tool<TAB>kind<TAB>regex
+#
+# kind is one of: shell | repl | menu | password | fullscreen
+#
+# Ordering matters: the first match wins, so specific prompts must come before
+# the generic "ends in $/#/%/>" catches near the bottom. Edit this file to add
+# a prompt; no code change is needed.
+#
+# The regex is matched against the last non-blank line of a captured pane
+# (re.search, so anchors are up to you).
+#
+# NOTE: prompts nest. `msf6 >` can become `msf6 exploit(..) >`, then a session
+# gives `meterpreter >`, then `meterpreter > shell` gives `C:\>`. The current
+# prompt therefore belongs to the *deepest* process in the pane, and must be
+# rescanned when the process chain changes.
+
+# ------------------------------------------------------------------ REPLs ---
+python-repl	repl	^In \[\d+\]:\s*
+python-repl	repl	^\s*>>>\s*
+python-repl	repl	^\s*\.\.\.\s*
+ipython-cont	repl	^\s{3,}\.\.\.:\s*
+ruby-irb	repl	^irb\(main\):\d+:\d+[*>]\s*
+ruby-irb	repl	^\d+:\d+[*>]\s*
+ruby-irb	repl	irb\(main\):\d+:\d+[*>]\s*$
+perl-debug	repl	^\s*DB<\d+>\s*
+php-a	repl	^php >\s*
+node-repl	repl	^>\s*$
+
+# ------------------------------------------------------------- frameworks ---
+metasploit	repl	^msf\d*\s*[>#]\s*
+metasploit-module	repl	^msf\d* [^>]*[>#]\s*
+meterpreter	repl	^meterpreter\s*>\s*
+meterpreter-cmd	shell	^meterpreter\s*>\s*(shell|powershell)\s*$
+msf-console-busy	repl	^\s*\*\s*$
+sliver	repl	^sliver\s*(\([^)]*\))?\s*>\s*
+cobaltstrike	repl	^beacon>\s*
+cobaltstrike	repl	^\d+\.?\s*beacon>\s*
+empire	repl	^\(Empire\)\s*>\s*
+empire-agent	repl	^\(Empire: [^)]*\)\s*>\s*
+
+# -------------------------------------------------------------- databases ---
+mysql	repl	^mysql>\s*
+mysql	repl	^MariaDB\s*\[[^]]*\]>\s*
+sqlite	repl	^sqlite>\s*
+mongo	repl	^>\s*$
+redis	repl	^\d+\.\d+\.\d+\.\d+:\d+>\s*
+psql	repl	^[a-zA-Z_][\w-]*=[>#]?[*!]?\s*$
+psql	repl	^[a-zA-Z_][\w-]*\([^)]*\)[>#]\s*
+
+# ---------------------------------------------------------------- network ---
+ftp	repl	^ftp>\s*
+smbclient	repl	^smb:\s.*>\s*
+smbclient	repl	^smb>\s*
+telnet	repl	^telnet>\s*
+nmap	repl	^nmap>\s*
+netcat	repl	^nc>\s*
+ssh-client	menu	^ssh>\s*
+winrm-evil	repl	^Evil-WinRM\([^)]*\)\[[^]]*\]>\s*
+impacket	repl	^[A-Za-z]+\[[^]]*\]>\s*
+
+# ---------------------------------------------------------------- windows ---
+powershell	shell	^PS [A-Za-z]:\\[^>]*>\s*
+powershell	shell	^PS [^>]*>\s*
+cmd	shell	^[A-Za-z]:\\[^>]*>\s*
+cmd	shell	^[A-Za-z]:\\[^>]*>\s*\S*>\s*
+
+# -------------------------------------------------------------- passwords ---
+password	password	[Pp]assword(:|\s*$)
+password	password	^\[sudo\] password for
+passphrase	password	[Pp]assphrase(:|\s*$)
+key-unlock	password	^Enter passphrase
+ssh-hostkey	menu	Continue connecting \(yes/no
+ssh-hostkey	menu	fingerprint is
+pager	menu	^--More--|^\(END\)$|^:\s*$
+yesno	menu	\[[Yy]/[Nn]\][^:]*\s*$
+yesno	menu	\([Yy](es)?/[Nn](o)?(\[[A-Za-z]\])?\)
+
+# ----------------------------------------------------------------- shells ---
+root-shell	shell	^[^\s]*#\s*$
+root-shell	shell	^[^\s]*➜\s*\S*\s*$
+user-shell	shell	^[^\s]*\$\s*$
+user-shell	shell	^\[[^]]+\][#$]\s*
+user-shell	shell	^[^\s]*%\s*$
+fish-shell	shell	^[^\s]*>\s*$
+shell	shell	^[^\s]*[>#$%]\s*$

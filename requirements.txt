@@ -1,2 +1,6 @@
-libtmux
-ipython
+# Pinned: libtmux removes APIs between minor releases. compat.py assumes the
+# 0.62.x surface (Server.sessions.get / Session.active_pane / active_window).
+libtmux>=0.62,<0.63
+
+# Optional: only used by main/start_tmux_dashboard.py (the tinydb-driven CLI).
+tinydb>=4,<5
