@@ -37,6 +37,7 @@
             mkdir -p $out/lib/tmux-dashboard
             cp -L ${./main_tdashboard.py} $out/lib/tmux-dashboard/main_tdashboard.py
             cp -L ${./compat.py} $out/lib/tmux-dashboard/compat.py
+            cp -L ${./remote.py} $out/lib/tmux-dashboard/remote.py
             cp -L ${./termstate.py} $out/lib/tmux-dashboard/termstate.py
             cp -L ${./prompts.py} $out/lib/tmux-dashboard/prompts.py
             cp -L ${./prompts.txt} $out/lib/tmux-dashboard/prompts.txt
@@ -47,7 +48,9 @@
 
           dashboard = pkgs.writeShellApplication {
             name = "tmux-dashboard";
-            runtimeInputs = [ py pkgs.tmux pkgs.coreutils ];
+            # ssh is needed only for --target HOST; it is cheap to include
+            # and keeps the wrapper honest about what it can do.
+            runtimeInputs = [ py pkgs.tmux pkgs.coreutils pkgs.openssh ];
             text = ''
               # Refuse root. A tmux server is per-user, so a root-run
               # dashboard attaches to a *different* server than the one you
@@ -73,10 +76,16 @@
         rec {
           inherit dashboard;
           ci = pkgs.runCommand "tmux-dashboard-ci" {
-            nativeBuildInputs = [ py pkgs.shellcheck pkgs.tmux ];
+            nativeBuildInputs = [ py pkgs.shellcheck pkgs.tmux pkgs.openssh ];
           } ''
-            cd ${./.}
-            ${py}/bin/python3 -m compileall -q main_tdashboard.py compat.py
+            # The store is read-only and both compileall and unittest want to
+            # write __pycache__, so work on a copy.
+            cp -r ${./.} src
+            cd src
+            chmod -R u+w .
+            ${py}/bin/python3 -m compileall -q main_tdashboard.py compat.py \
+              remote.py termstate.py prompts.py
+            ${py}/bin/python3 -m unittest test_detection test_remote
             shellcheck scripts/*.sh || true
             touch $out
           '';
@@ -125,6 +134,7 @@
 
               echo "tmux-dashboard dev shell"
               echo "  tmux-dashboard -i scripts --session-file scripts/1_session.py"
+              echo "  tmux-dashboard --check --target HOST   # can I drive HOST?"
               echo "  pi-tmux-nudge -k        # keep idle agents moving"
               echo "  pytest -q"
             '';

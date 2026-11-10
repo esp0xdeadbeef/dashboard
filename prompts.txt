@@ -29,6 +29,17 @@ perl-debug	repl	^\s*DB<\d+>\s*
 php-a	repl	^php >\s*
 node-repl	repl	^>\s*$
 
+# -------------------------------------------------------------- hypervisors ---
+# QEMU's monitor, reached with Ctrl-a c on a nixos-shell/build-vm console. It is
+# a real interactive prompt: commands like `quit`, `info status`, `sendkey` go
+# here, and sending a shell command would be an error. Distinct from the
+# guest's own shell on the same pane.
+qemu-monitor	repl	^\(qemu\)\s*
+qemu-monitor	repl	^QEMU [0-9.]+ monitor - type 'help'
+# GRUB's menu/editor, which a VM can drop to before any guest shell exists.
+grub-shell	shell	^grub>\s*$
+grub-edit	menu	^grub edit>\s*$
+
 # ------------------------------------------------------------- frameworks ---
 metasploit	repl	^msf\d*\s*[>#]\s*
 metasploit-module	repl	^msf\d* [^>]*[>#]\s*

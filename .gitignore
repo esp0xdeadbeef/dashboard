@@ -2,3 +2,7 @@
 personal_scripts/
 venv/
 __pycache__/
+
+# nix build / nix develop artifacts
+/result
+/result-*

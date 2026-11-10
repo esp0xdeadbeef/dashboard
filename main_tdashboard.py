@@ -3,13 +3,17 @@ import argparse
 import string
 import sys
 import re
+import shutil
 import subprocess
 import os
+import tempfile
 import time
 
 import libtmux
 
 import compat
+import prompts
+import remote
 import termstate
 
 
@@ -271,15 +275,82 @@ send_keys_to_pane(pane, get_file_content(all_files["test"]))
                 print("Checked.")
 
 
+# Characters that mark a line as terminal echo rather than program output. A
+# prompt followed by the typed command contains both the prompt and the text,
+# so it must not be treated as evidence that the program produced it.
+_ECHO_MARKERS = ("$ ", "# ", "% ", "> ")
+
+
+def _message_in_output(lines, message):
+    """True when `message` appears in pane output, ignoring echoed input.
+
+    Two independent filters, because either alone is defeatable:
+
+    1. A line whose text before the message looks like a prompt (``...$ ...``)
+       is the shell echoing the command that was typed.
+    2. A line that contains MORE than the bare message is a command line too:
+       an `echo` prints exactly `message`, so a line carrying `message` plus
+       other text (`sleep 6; echo <message>`) can only be the echo. This also
+       catches wrapped echoes, where the terminal broke the line and the prompt
+       is no longer visible on the same row -- observed 2026-11-10, which made a
+       6-second command look finished in 0.4s.
+    """
+    for line in lines:
+        if message not in line:
+            continue
+        if line.strip() == message.strip():
+            return True
+        if any(marker in line[: max(0, line.index(message))] for marker in _ECHO_MARKERS):
+            continue
+        # Message plus surrounding text is an echo, not program output.
+        continue
+    return False
+
+
 def wait_untill_msg(pane,
                     message,
                     time_out=0.2,
-                    safe_output=None):
-    while 1:
-        if message in ''.join(pane_capture(pane)):
-            break
-        else:
-            time.sleep(time_out)
+                    safe_output=None,
+                    timeout=60,
+                    raise_on_timeout=False):
+    """Block until `message` appears in the pane.
+
+    The original loop never gave up: if the message could not appear (a tool
+    that is not installed, a listener that never received its connection) the
+    dashboard hung with no output, which looks identical to "still working".
+    A bounded wait turns that into a decision.
+
+    Timing out is not automatically an error: a session file may be waiting
+    for something that is only logged in passing, and continuing is often
+    right. The default therefore warns and returns False, and
+    `raise_on_timeout=True` makes it fatal for scripts that need the check to
+    mean something.
+
+    The message must appear in the pane's OUTPUT, not in the echo of the
+    command that produced it. The terminal echoes every line that is typed, so
+    a plain substring search over the whole screen matches the command line
+    itself and returns immediately. That turns a wait into a no-op, and it is
+    how a check for "is ppp0 up?" once reported UP while the interface did not
+    exist: the marker was in the `if ...; then echo <marker>_UP; ...` that had
+    just been typed. A line that contains the message *and* is a shell prompt
+    echoing input is therefore skipped.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _message_in_output(pane_capture(pane), message):
+            return True
+        time.sleep(time_out)
+    target = getattr(pane, "pane_id", pane)
+    tail = [line for line in pane_capture(pane, size=10) if line.strip()][-3:]
+    print(f"{{wait_untill_msg}} timed out after {timeout}s waiting for "
+          f"{message!r} in {target}")
+    for line in tail:
+        print(f"    | {line}")
+    if raise_on_timeout:
+        raise compat.CompatError(
+            f"wait_untill_msg: {message!r} did not appear in {target} within "
+            f"{timeout}s (last line: {tail[-1] if tail else '<empty>'})")
+    return False
 
 
 def panes_from_list(session,
@@ -288,33 +359,117 @@ def panes_from_list(session,
                     debugging=False,
                     all_unchecked=True,
                     start_directory=None):
-    # Session.active_window / active_pane return freshly-queried objects, but
-    # splitting with attach=True makes libtmux's cached window handle stale
-    # ("can't find window: @N"), so re-resolve the session each iteration.
-    def fresh():
-        return compat.require_session(
-            compat.reconnect(session.server), session.session_name)
+    """Fill one window of `session` with one pane per entry.
 
-    for i in keys_to_send_list:
+    Every split, layout change and keystroke targets a specific window
+    (``@N``). Relying on "the session's active window" works locally by luck
+    -- you are usually looking at it -- but is wrong on a remote or sudo
+    server, where another client may have switched windows, and filling the
+    wrong window fails silently.
+
+    Window and pane lookups go through `compat`'s raw tmux helpers rather than
+    libtmux's object graph: a session file normally *renews* its session
+    (kills and recreates it), after which libtmux's cached ``$id`` and window
+    list are stale and raise "list-windows: can't find session: $N". Asking
+    tmux for the current state each time is both correct and cheap.
+    """
+    session_name = session.session_name
+
+    try:
+        window_name = compat.window_state(session_name)[1]
+    except compat.CompatError as exc:
+        raise compat.CompatError(
+            f"session {session_name!r} is not ready to be filled ({exc}). A "
+            f"session file must create its session (renew_session) and its "
+            f"window (new_window) before calling panes_from_list()."
+        ) from exc
+
+    def window_state():
+        """(window_id, window_name, active_pane_id) for the window we fill.
+
+        Re-read from tmux on every step for two reasons: the window id is
+        what every call below targets (so keys cannot land in a window
+        another client switched to), and a session file may renew its session
+        between calls. A missing session is reported as such, because the
+        usual cause is the panes' own programs exiting -- a window with no
+        panes is destroyed, and a session with no windows dies with it.
+        """
+        try:
+            return compat.window_state(session_name, window_name)
+        except compat.CompatError as exc:
+            raise compat.CompatError(
+                f"session {session_name!r} disappeared while filling window "
+                f"{window_name!r}: {exc}\n"
+                f"That normally means every pane in the window ran something "
+                f"that exited (the window dies with its last pane). Check the "
+                f"last commands sent to {window_name!r}."
+            ) from exc
+
+    # Split first, then fill. Doing it the other way round means a pane whose
+    # script ends in `exit` (which is normal for a demo: run a tool, quit it)
+    # destroys its window before the next split happens, taking the session
+    # with it. Creating every pane up front makes the window's existence
+    # independent of what the first pane's content does.
+    total = len(keys_to_send_list)
+    for index in range(1, total):
+        compat.split_pane(None, session_name,
+                          attach=True,
+                          start_directory=start_directory,
+                          window_id=window_state()[0])
+        compat.select_layout_for(None, session_name, 'tiled',
+                                 window_id=window_state()[0])
+
+    # Fill them in the order they were created: pane 0 (the original) first,
+    # then the splits in order.
+    pane_ids = compat.pane_ids_of_window(window_state()[0])
+    for index, i in enumerate(keys_to_send_list):
         if all_unchecked:
             keys = f"# skip check comming = 99999 #all unchecked \n{i}"
         else:
             keys = i
-        cur = fresh()
-        send_keys_to_pane(
-            compat.active_pane(cur),
-            keys,
-            time_out_unchecked=0,
-            send_enter_last_row=send_enter,
-            debugging=debugging,
+        try:
+            pane_id = pane_ids[index]
+        except IndexError:
+            raise compat.CompatError(
+                f"window {window_name!r} has fewer panes than the "
+                f"{total} entries passed to panes_from_list(); a pane "
+                f"probably exited early")
+        try:
+            send_keys_to_pane(
+                compat.pane_by_id(pane_id),
+                keys,
+                time_out_unchecked=0,
+                send_enter_last_row=send_enter,
+                debugging=debugging,
+            )
+        except (compat.CompatError, KeyError) as exc:
+            # The pane went away mid-send: its content ran something that
+            # exited, and the window (and maybe the session) went with it.
+            # Other spawn_* functions are unaffected, so report and stop
+            # filling this window instead of aborting the whole run.
+            print(f"{{panes_from_list}} pane {pane_id} of window "
+                  f"{window_name!r} disappeared: {exc}")
+            return
+        if not compat.get_session(compat.connect(), session_name):
+            print(f"{{panes_from_list}} session {session_name!r} exited after "
+                  f"filling pane {pane_id} (its content ended with `exit`)")
+            return
+    compat.select_layout_for(None, session_name, 'tiled',
+                             window_id=window_state()[0])
 
-        )
-        compat.select_layout_for(fresh(), session.session_name, 'tiled')
-        if keys_to_send_list[-1] != i:
-            compat.split_pane(fresh(), session.session_name,
-                              attach=True,
-                              start_directory=start_directory)
-    compat.select_layout_for(fresh(), session.session_name, 'tiled')
+
+def _pane_target(pane):
+    """The most specific target string tmux will accept for this pane.
+
+    A pane id (%N) is unique across the whole server and survives renames,
+    which is exactly what a remote or sudo target needs: session *names* are
+    not unique across servers and "the session's active pane" is whatever was
+    active last, not the pane the caller is holding.
+    """
+    pane_id = getattr(pane, "pane_id", None)
+    if pane_id:
+        return pane_id
+    return f"{pane.session.name}:{pane.window_index}.{pane.pane_index}"
 
 
 def pane_capture(pane,
@@ -323,21 +478,26 @@ def pane_capture(pane,
                  debugging=False,
                  raw=False
                  ):
+    """Visible (or scrollback) text of a pane, as a list of lines.
+
+    Goes through termstate's tmux source rather than `tmux` on $PATH, so this
+    works unchanged against a remote host or a sudo server.
+    """
     res = []
     if old_method:
         res = pane.cmd('capture-pane', '-p',
                        '-S',  "-" + str(size)).stdout
     else:
-        res_cmd = ["tmux", "capture-pane", "-t", pane.session.name,
-                   "-p", "-S", "-" + str(size)]
-        len_cmd = ["tmux", "capture-pane", "-t", pane.session.name,
-                   "-p", "-S", "-" + str(size + 2)]
+        target = _pane_target(pane)
+        len_cmd = ["capture-pane", "-t", target, "-p", "-S", "-" + str(size + 2)]
         while res == []:
-            out = run(res_cmd).stdout
-            res = out[:-1].split('\n') if out else []
+            rc, out, _ = termstate.tmux_source().run(
+                "capture-pane", "-t", target, "-p", "-S", "-" + str(size))
+            res = out[:-1].split('\n') if (rc == 0 and out) else []
     if raw:
         return res
-    len_ = run(len_cmd).stdout[:-1].split('\n')
+    rc, out, _ = termstate.tmux_source().run(*len_cmd)
+    len_ = out[:-1].split('\n') if rc == 0 and out else []
     if len(res) == len(len_):
         for counter, i in enumerate(res[::-1]):
             if i != '':
@@ -370,7 +530,10 @@ def get_attached_pane(server, session_name="main"):
 
 
 def at_end(pane, time_out=1, debugging=False,
-           send_enter_to_check_if_interpreter=True):
+           send_enter_to_check_if_interpreter=True,
+           require_shell=False,
+           probe=False,
+           expect_host=None):
     """True when the program in `pane` is blocked waiting for terminal input.
 
     Previous implementation typed 52 characters of junk into the pane, erased
@@ -383,23 +546,210 @@ def at_end(pane, time_out=1, debugging=False,
     This asks the kernel instead: find the process that owns the pane's tty,
     then check whether it is blocked in a read. No keystrokes are sent.
 
-    The arguments after `pane` are kept for call-site compatibility with the
-    old probing version and are ignored.
+    The old version of this function answered the question by typing junk into
+    the pane. That was rightly removed, because it mutates what it measures. So
+    for an ordinary shell pane the `/proc` check is the whole answer.
+
+    It is NOT sufficient for a pane that hosts another terminal (QEMU's serial
+    console, screen, minicom): there the foreground process is blocked on the
+    tty for its entire lifetime, so process state is always "ready". For those,
+    pass `probe=True` to fall back to the only signal that still means
+    something there: send a bare Enter and require the pane to look the same
+    afterwards (a real prompt redraws identically; a booting guest, a login
+    prompt, or a running command does not).
+
+    `require_shell` additionally refuses a *nested* prompt (a REPL, or a
+    hypervisor monitor like QEMU's). Those accept input but reject a shell
+    command with "unknown command", so sending into one looks like a silent
+    failure. Default False keeps the old behaviour for callers that do mean to
+    drive the nested prompt.
+
+    `expect_host` requires the prompt to name that host, for a pane that hosts
+    a whole machine: without it the shell that *launched* the guest (e.g.
+    "[nix-shell:~/repo]$") is indistinguishable from the guest's own prompt, and
+    commands silently run on the wrong machine.
+
+    The same hazard exists one level up with `--target HOST`: the pane may
+    still be showing *our* shell while the ssh connection is being set up. The
+    process-state check covers that (an `ssh` client is not blocked reading
+    the tty), so `expect_host` stays opt-in here rather than being forced on
+    every pane of a remote target.
     """
     target = pane.pane_id if hasattr(pane, "pane_id") else str(pane)
-    state = termstate.pane_state(target)
+
+    # For a pane that hosts another terminal the process state cannot answer
+    # anything, so ask the redraw question first and hand the answer to
+    # termstate, which uses it both to decide readiness and to *learn* the
+    # prompt it is looking at (see termstate.pane_state's `stable`).
+    # Ask it only when it could matter: a plain shell pane is already answered
+    # by process state, and the probe sends a keystroke.
+    hosts_terminal = termstate.is_terminal_host(target)
+    stable = None
+    if probe or (hosts_terminal and send_enter_to_check_if_interpreter):
+        stable = _stable_prompt(pane, debugging=debugging)
+
+    state = termstate.pane_state(target, expect_host=expect_host,
+                                 stable=stable)
     if debugging:
         print(f"{{at_end}} {termstate.describe(target)}")
     # ready = the tty owner wants input. safe_to_send additionally keeps a
     # command line out of a password / pager / yes-no prompt.
-    return state.ready and state.safe_to_send
+    if not (state.ready and state.safe_to_send):
+        return False
+    if require_shell and state.prompt is not None and state.prompt.is_nested_shell():
+        if debugging:
+            print(f"{{at_end}} refusing nested prompt {state.prompt}")
+        return False
+    if probe:
+        return bool(stable)
+    return True
+
+
+# Asynchronous console output is identified by its timestamp prefix, not by
+# the name of the program that wrote it (see prompts.CONSOLE_NOISE).
+_CONSOLE_JUNK = prompts.CONSOLE_NOISE
+
+# A login prompt is stable text that is never a shell.
+_LOGIN_PROMPT = re.compile(r"\blogin:(\s|$)")
+
+
+def _screen_signature(pane):
+    """The pane's *visible* content: junk stripped, trailing blanks dropped.
+
+    Only the visible screen is considered. Reading scrollback would reach back
+    into history -- an earlier monitor prompt or a finished command -- and make
+    the pane look like something it no longer is.
+
+    Timestamped console output is removed rather than compared, because it
+    arrives asynchronously and would make any two samples differ.
+    """
+    lines = []
+    for line in compat.capture_pane(pane):
+        # A line carrying console junk is dropped whole: blanking just the
+        # matched token leaves fragments (" : y") that still differ between
+        # samples, which is exactly what this comparison must not see.
+        if _CONSOLE_JUNK.search(line):
+            continue
+        lines.append(line.rstrip())
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _stable_prompt(pane, debugging=False):
+    """True when a bare Enter leaves the pane looking the same.
+
+    This is the check that works for a pane hosting another terminal, where
+    process state cannot help. A program at a prompt redraws that prompt
+    identically on an empty Enter; a booting guest, a login prompt, or a
+    command still producing output does not.
+
+    An unknown prompt is exactly the case this has to handle (a guest's PS1, a
+    themed shell), so a strict `prompts.match_line` gate would make the check
+    useless for precisely the panes that need it. But "the last line repeats"
+    alone is not enough either: a login banner is perfectly stable, so it is
+    accepted as a prompt and a caller then types a command into a login prompt.
+    Measured 2026-11-10: `isp-neon login: root (automatic login)` was reported
+    READY.
+
+    The rule is therefore: the line must be stable AND must not be a line the
+    prompt table positively identifies as NOT a shell. A line the table knows is
+    a login prompt, a password prompt or a nested REPL is rejected; anything it
+    does not know is still accepted, which keeps unknown prompts working.
+    """
+    def prompt_line():
+        """The live prompt, with console junk cut off wherever it starts.
+
+        The junk is frequently written *onto* the prompt line rather than after
+        it, so the tail is truncated at the first junk match rather than the
+        whole line being discarded -- otherwise a busy console looks like it
+        has no prompt at all.
+        """
+        for line in reversed(compat.capture_pane(pane)):
+            m = _CONSOLE_JUNK.search(line)
+            if m is not None:
+                line = line[: m.start()]
+            line = line.rstrip()
+            if line.strip():
+                return line
+        return ""
+
+    def is_not_a_shell(line):
+        """True when the prompt table says this line is definitely not a shell."""
+        try:
+            import prompts as _prompts
+        except Exception:
+            return False
+        # Login banners are the case that matters: they are stable text and are
+        # never a shell, so accepting them sends a command to a login prompt.
+        if _LOGIN_PROMPT.search(line):
+            return True
+        m = _prompts.match_line(line)
+        if m is None:
+            return False
+        return not m.safe_to_send or m.is_nested_shell()
+
+    before = prompt_line()
+    if not before:
+        if debugging:
+            print("{at_end/probe} nothing on screen to settle")
+        return False
+    if is_not_a_shell(before):
+        if debugging:
+            print(f"{{at_end/probe}} not a shell: {before!r}")
+        return False
+
+    compat.send_keys(pane, "")
+    compat.send_keys(pane, "C-m")
+
+    # A busy console may still be logging, in which case the *exact* last line
+    # never repeats. What must hold is that the last line came back and did not
+    # turn into a different piece of text: a guest that is booting or running a
+    # command loses it or replaces it, so this is still a real check.
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        time.sleep(0.1)
+        after = prompt_line()
+        if not after:
+            continue
+        if after == before:
+            if is_not_a_shell(after):
+                if debugging:
+                    print(f"{{at_end/probe}} stable but not a shell: {after!r}")
+                return False
+            if debugging:
+                print(f"{{at_end/probe}} stable line: {after!r}")
+            return True
+        # Console noise written over the prompt: compare up to the junk.
+        before_head = before[: len(after)] if _CONSOLE_JUNK.search(before) else before
+        if _CONSOLE_JUNK.search(before) and after == before_head:
+            if debugging:
+                print(f"{{at_end/probe}} stable prompt under noise: {after!r}")
+            return True
+    if debugging:
+        print(f"{{at_end/probe}} did not settle (was {before!r})")
+    return False
 
 
 def checked_cmd(pane,
                 row_to_send,
                 last_row_send,
                 time_out=1,
-                debugging=False):
+                debugging=False,
+                complete_timeout=120):
+    """Wait until the pane is at a prompt, send the row, then wait for it to finish.
+
+    The wait *after* sending is the important half and it used to be a single
+    fixed sleep. That returns before a long command has finished, so the caller
+    reads whatever happens to be on screen: measured 2026-11-10, a
+    `systemctl restart pppd; sleep 20; ip show ppp0` returned immediately with
+    no output at all, and the follow-up read showed the *previous* command's
+    result. Anything that took longer than `time_out` looked like it had
+    produced nothing.
+
+    Completion is decided by the prompt returning (through `at_end`), not by a
+    timer, with `complete_timeout` as a bound so a hung command still surfaces.
+    """
     while 1:
         try:
             if (len(last_row_send) > 5) and last_row_send == "".join(pane_capture(pane))[len(last_row_send):]:
@@ -420,7 +770,40 @@ def checked_cmd(pane,
         time.sleep(time_out)
     compat.send_keys(pane, row_to_send)
     compat.send_keys(pane, "C-m")
-    time.sleep(time_out)
+
+    # Wait for the command to complete: the prompt must go away and come back.
+    #
+    # Testing "is the shell ready" alone is not enough -- it is ready the instant
+    # the line is sent, before the command has run at all, which is how a
+    # completion check can pass immediately. So the prompt must first be observed
+    # GONE (the shell is executing), then observed again. A command that prints
+    # nothing still occupies the shell, so the gap is real rather than inferred
+    # from output.
+    # Completion is decided by a MARKER the command prints when it is done.
+    #
+    # No prompt heuristic can work here. In a pane that hosts a terminal (QEMU's
+    # serial console, screen, minicom) the foreground process is blocked on the
+    # tty for its whole lifetime, so /proc says READY during a boot, at a login
+    # prompt and while a command runs; measured 2026-11-10, `sleep 6` was
+    # reported READY for five consecutive samples. The screen is no better: a
+    # command that has not printed yet leaves the old prompt as the last line,
+    # so "did the prompt come back" is indistinguishable from "it never left".
+    # There is also no host-side process to inspect, because the command runs
+    # inside the guest.
+    #
+    # A marker appended to the command is the only signal that means exactly one
+    # thing: the shell reached the end of that command. `wait_untill_msg` ignores
+    # the terminal's echo of the command line, so this cannot be satisfied by the
+    # text we typed ourselves.
+    marker = f"__CC_{os.getpid()}_{int(time.time() * 1000)}__"
+    compat.send_keys(pane, f"echo {marker}_B; {row_to_send}; echo {marker}_E")
+    compat.send_keys(pane, "C-m")
+    if wait_untill_msg(pane, f"{marker}_E", timeout=complete_timeout):
+        if debugging:
+            print('{checked_cmd} completed (end marker seen)')
+        return
+    print(f"{{checked_cmd}} did not complete within {complete_timeout}s: "
+          f"{row_to_send!r}", file=sys.stderr)
 
 
 def interactive_dashboard(session_functions, debugging):
@@ -529,7 +912,45 @@ def parse_args():
         '└─$',
         '▶'
     ]
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Scripted multi-pane tmux orchestration.",
+        epilog="""
+Targets (--target), so the same session files work anywhere:
+
+  local                 this machine, your tmux      (the default)
+  local:sudo            `sudo tmux` here  -> panes are root's
+  local:sudo-login      your tmux here, panes run `sudo -i`
+  DEVBOX                a host over ssh: needs `ssh DEVBOX true` to work
+                        without a prompt (key auth; ~/.ssh/config applies)
+  DEVBOX:sudo           `sudo tmux` on DEVBOX (its root pane)
+  DEVBOX:sudo-login     your tmux on DEVBOX, panes run `sudo -i`
+  HOST,sock=NAME        `tmux -L NAME` on HOST
+
+Panes are created in whatever session your session file names, so the
+remote host keeps its normal layout. Spawn-all attaches with
+`tmux attach -t spawn-all`, which exists on every target.
+
+Pane readiness is decided from /proc, which must be readable on the machine
+(or user) that owns the panes. For --target HOST or a :sudo target that
+means one shell round-trip per rescan; if it fails, detection degrades to
+the on-screen prompt and says so.
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--target",
+        default=os.environ.get("DASHBOARD_TARGET", "local"),
+        type=str,
+        help="where the tmux server lives: local (default), HOST, HOST:sudo, "
+             "local:sudo, HOST:sudo-login, HOST,sock=NAME "
+             "(default: $DASHBOARD_TARGET or 'local')",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="verify --target (tmux reachable, /proc readable, host name) "
+             "and exit; useful before pointing a session file at a new host",
+    )
     parser.add_argument(
         "--session-file",
         help="configuration file, check the scripts directory if you dont know how to make one.",
@@ -589,8 +1010,15 @@ def main():
 
     args = parse_args()
     interpreters = args.interpreters
-    server = connect_server()
+    try:
+        server = connect_server(args.target)
+    except (compat.CompatError, remote.RemoteError) as exc:
+        print(f"dashboard: {exc}", file=sys.stderr)
+        return 2
     location = args.session_file
+
+    if args.check:
+        return preflight(server, globals().get("dashboard_target"))
 
     # The session file is exec'd into module globals (not main()'s locals) so
     # that (a) spawn_* functions defined there become module-level names the
@@ -605,13 +1033,19 @@ def main():
     session_functions = natural_sort(
         list_potentional_sessions(globals())
     )
+    # s_all() and the post-run pane binding below read these from module
+    # globals, and the interactive dashboard re-reads all_files each pass.
+    globals()["session_functions"] = session_functions
+    all_files = get_dir_session_files(args.scripts)
+
+    # One name per spawn_* function, so a session file may spawn several
+    # windows without a second spawn_* being invented for them.
     if args.interactive:
         interactive_dashboard(
             session_functions,
             debugging=True
         )
     else:
-        all_files = get_dir_session_files(args.scripts)
         s_all(respawn_all=False)
 
     for session_function in session_functions:
@@ -629,21 +1063,127 @@ def main():
     return 0
 
 
-def connect_server():
-    """Connect to this user's tmux server, with a clear error if absent."""
+def connect_server(target_spec="local"):
+    """Point the dashboard at `target_spec` and return its tmux Server.
+
+    This is the one place that decides *which* tmux server the whole run
+    talks to, and it decides it three times over, deliberately:
+
+    * `compat.set_server_target` -> every libtmux call (sessions, windows,
+      panes, splits);
+    * `termstate.set_tmux_source` -> capture-pane and display-message, used
+      for prompt detection and pane text;
+    * `termstate.set_proc_source`  -> the /proc that decides readiness, which
+      for a remote host or a sudo server is *not* ours.
+
+    A shim on disk bridges libtmux to a remote or sudo `tmux` (see
+    remote.make_tmux_shim). For the default target none of this is injected
+    and the dashboard behaves exactly as before.
+    """
     try:
-        return compat.connect()
+        target = remote.parse_spec(target_spec)
+    except remote.RemoteError as exc:
+        raise compat.CompatError(f"bad --target {target_spec!r}: {exc}")
+
+    if target.transport == "local" and not target.sudo:
+        compat.set_server_target(socket_name=target.socket)
+        termstate.set_tmux_source(termstate.TmuxSource())
+        termstate.set_proc_source(termstate.LocalProc())
+        server = compat.connect()
+        expect_host = remote.host_identity()
+    else:
+        if not shutil.which("ssh") and target.transport == "ssh":
+            raise compat.CompatError(
+                "ssh is not installed, so --target "
+                f"{target.name!r} cannot be reached")
+        if target.transport == "ssh" and target.sudo and \
+                not _ssh_noninteractive_ok(target.host):
+            raise compat.CompatError(
+                f"--target {target.name!r}: `ssh {target.host}` does not work "
+                f"without a prompt. A dashboard cannot answer a password or "
+                f"passphrase prompt; set up a key (or a warm ControlMaster) "
+                f"first, and verify with:  ssh {target.host} true")
+        tmpdir = tempfile.mkdtemp(prefix="tmux-dashboard-")
+        session = remote.install(target, tmpdir)
+        try:
+            session.check()
+        except remote.RemoteError as exc:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise compat.CompatError(str(exc)) from exc
+        server = compat.connect()
+        expect_host = remote.remote_host_identity(target, session)
+
+    globals()["dashboard_target"] = target
+    globals()["target_host"] = expect_host
+    if target.transport == "ssh":
+        print(f"dashboard: target {target.describe()}  (host {expect_host})")
+    return server
+
+
+def preflight(server, target):
+    """Report what a --target can actually do, and return an exit code.
+
+    The question this answers is the one that is expensive to get wrong: can
+    this dashboard *detect readiness* on that target, or will it only be able
+    to type? Detection needs /proc on the machine that owns the panes, so a
+    remote host gets one probe, and a sudo target gets the same probe under
+    sudo. Everything is reported, nothing is guessed.
+    """
+    print(f"target: {target.describe() if target else 'local'}")
+    try:
+        sessions = compat.list_session_names(server)
     except Exception as exc:
-        raise compat.CompatError(
-            f"cannot reach the tmux server: {exc}\n"
-            f"Start one as your normal user first (run `tmux`), and make sure "
-            f"you are not inside an su/sudo shell."
-        ) from exc
+        print(f"  tmux:  FAILED ({exc})")
+        return 2
+    print(f"  tmux:  ok ({len(sessions)} session(s)"
+          + (f": {', '.join(sessions[:8])}" if sessions else "") + ")")
+
+    proc = termstate.proc_source()
+    name = type(proc).__name__
+    if isinstance(proc, termstate.LocalProc):
+        print(f"  /proc: ok ({name}: this machine, this user)")
+        print("  host:  " + remote.host_identity())
+        return 0
+
+    # Remote or sudo: prove the probe works by classifying a real process on
+    # the far side. Our own pid is wrong -- it does not exist there.
+    session = remote.TargetSession(target)
+    try:
+        src = termstate.RemoteProc(session)
+        # A pid that is guaranteed to exist on the far side *and* to persist:
+        # pid 1. Reading its stat is exactly the permission that decides
+        # whether readiness detection can work at all.
+        pid = 1
+        own = src.stat(pid)
+    except Exception as exc:
+        print(f"  /proc: FAILED ({exc})")
+        return 2
+    if own is None:
+        print(f"  /proc: FAILED ({src.last_error or 'probe returned nothing'})")
+        print("         spawning will work, but readiness will fall back to "
+              "screen matching")
+        return 1
+    print(f"  /proc: ok ({name}: pid {pid} -> {own['comm']}, "
+          f"wchan available)")
+    print("  host:  " + remote.remote_host_identity(target, session))
+    return 0
+
+
+def _ssh_noninteractive_ok(host, timeout=10):
+    """Would `ssh host true` succeed without asking us anything?"""
+    try:
+        proc = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=" +
+             str(timeout), host, "true"],
+            capture_output=True, text=True, timeout=timeout + 5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
 
 
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except compat.CompatError as exc:
+    except (compat.CompatError, remote.RemoteError) as exc:
         print(f"dashboard: {exc}", file=sys.stderr)
         sys.exit(2)
