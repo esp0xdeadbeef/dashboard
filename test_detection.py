@@ -156,6 +156,54 @@ class StablePromptProbe(unittest.TestCase):
         self.assertIsNone(prompts.match_line(sig.splitlines()[-1]))
 
 
+class BuildProgressIsNotAShell(unittest.TestCase):
+    """A build in progress must never be reported as a prompt.
+
+    Measured 2026-11-11 on isp-cobalt: `nixos-shell` was still building when
+    the acceptance probe ran, and `wait_guest` returned True in the middle of
+    the build. The probe sends a bare Enter, so there is no echo to
+    distinguish "prompt" from "a program printing":
+
+        [17/21 built, 3 copied (13.7 MiB), 2.6 MiB DL]
+
+    is perfectly stable under an empty Enter, was unknown to the prompt table,
+    and so was accepted -- the probe then typed into the build, and every hop
+    reported `<no output>` because the commands ran on the host shell (or on
+    nothing) instead of the guest.
+
+    The fix is not "more stable": the shapes that mean "still working" are
+    rejected outright, leaving the redraw test to decide the rest.
+    """
+
+    WORKING = [
+        "[17/21 built, 3 copied (13.7 MiB), 2.6 MiB DL]",
+        "[1/11/21 built, 3 copied (13.7 MiB), 2.6 MiB DL] building unit-dbus-ber",
+        "building '/nix/store/abc-system-units.drv'...",
+        "copying path '/nix/store/x' from 'https://cache.nixos.org'...",
+        "unpacking sources",
+        "fetching path '/nix/store/y'...",
+    ]
+
+    def test_working_lines_are_rejected(self):
+        for line in self.WORKING:
+            self.assertTrue(
+                any(p.search(line) for p in main_tdashboard._NOT_A_SHELL_LINE),
+                f"{line!r} would be accepted as a prompt")
+
+    def test_real_prompts_still_pass(self):
+        for line in ("[root@isp-cobalt:~]#", "user@host:~$",
+                     "[nix-shell:~/repo]$"):
+            self.assertFalse(
+                any(p.search(line) for p in main_tdashboard._NOT_A_SHELL_LINE),
+                f"{line!r} must still count as a prompt")
+
+    def test_table_does_not_already_cover_it(self):
+        # Guards the reason this class exists: the prompt table cannot help,
+        # because a build line is not a *prompt* and must not become one.
+        for line in self.WORKING:
+            self.assertIsNone(prompts.match_line(line))
+
+
 class LoginBannerIsNotAShell(unittest.TestCase):
     """A stable login banner must never be treated as a shell prompt.
 

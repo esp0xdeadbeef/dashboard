@@ -612,6 +612,25 @@ _CONSOLE_JUNK = prompts.CONSOLE_NOISE
 # A login prompt is stable text that is never a shell.
 _LOGIN_PROMPT = re.compile(r"\blogin:(\s|$)")
 
+# Lines that are *output*, never a shell waiting for input. They matter because
+# the probe below has no echo to go on: it sends an empty Enter, so the screen
+# is identical whether the line came from a prompt or from a program that is
+# still working. Measured 2026-11-11: a `nixos-shell` boot was reported READY
+# while `nix build` was still printing `[17/21 built, 3 copied (13.7 MiB) ...]`,
+# which no redraw test can distinguish from a prompt -- so the acceptance probe
+# typed into a build and ran its commands on the host shell instead of the
+# guest.
+_NOT_A_SHELL_LINE = (
+    # Nix's progress bar. Two shapes, both live: `[17/21 built, 3 copied ...]`
+    # (currently building) and `[1/11/21 built, 3 copied ...]` (built, copied
+    # and to-download totals).
+    re.compile(r"^\[\s*\d+/\d+(?:/\d+)? built"),
+    # Nix/`nix-build` log shapes: "building '...drv'...", "copying path ...".
+    re.compile(r"^(?:building|copying|fetching|unpacking|installing|evaluating)\b"),
+    # A line that ends in an ellipsis is describing continuation, not asking.
+    re.compile(r"(\.\.\.|…)$"),
+)
+
 
 def _screen_signature(pane):
     """The pane's *visible* content: junk stripped, trailing blanks dropped.
@@ -683,6 +702,8 @@ def _stable_prompt(pane, debugging=False):
         # Login banners are the case that matters: they are stable text and are
         # never a shell, so accepting them sends a command to a login prompt.
         if _LOGIN_PROMPT.search(line):
+            return True
+        if any(pattern.search(line) for pattern in _NOT_A_SHELL_LINE):
             return True
         m = _prompts.match_line(line)
         if m is None:
