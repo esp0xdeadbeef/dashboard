@@ -6,6 +6,7 @@ WIP.
 - [Description](#description)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Reading long output (serial consoles)](#reading-long-output-serial-consoles)
 
 ## Description
 
@@ -149,3 +150,49 @@ If `/proc` cannot be read on the target (no ssh, sudo refused), the dashboard
 says so and falls back to matching the on-screen prompt, which is weaker: a
 pane running a silent reader (`cat`, `nc`) looks busy. Use `# wait_untill=`
 directives in that case.
+
+## Reading long output (serial consoles)
+
+`get_output()` / `pane_capture()` read the **screen**, which is one windowful
+(~36 rows) and is fine for a shell that prints a few lines. They are the wrong
+tool for anything long, and outright unsafe on a serial console:
+
+* a `ps auxwwwww` with ~190 rows comes back as 14 lines, with nothing to say
+  it was truncated;
+* a UART has **kernel messages interleaved into the stream at arbitrary
+  points**, mid-line (`mt7996e … Failed to del Host Multicast Database`), so a
+  transfer over `tio`/`minicom` is never clean; and
+* filtering the junk out does not work. Stripping non-base64 characters
+  removes the junk *and the evidence*, so a corrupted transfer decodes into a
+  plausible **wrong** answer.
+
+Use `pane_stream()` instead:
+
+```python
+def spawn_main():
+    main_session = renew_session("main")
+    pane = compat.active_pane(main_session)
+    text = pane_stream(pane, "ps auxwwwww", location="/tmp/ps.txt")
+```
+
+It frames the transfer: the board emits `<seq>:<total>:<base64>:<md5>` per
+line, so
+
+* every record is verifiable on its own, and
+* a **lost or split record shows up as a gap** in the sequence.
+
+That second point is the one that is easy to get wrong. A checksum per line is
+*not* enough: when junk splits a record in two, each half is still a
+self-consistent `payload|checksum` pair, so validation passes on fragments and
+the result is half-corrupted data. Only `seq`/`total` expose that. (A split
+takes `ps`'s own wrapping with it -- measured on `l-portal`, 40 of 99 rows were
+malformed and every one of them validated.)
+
+If records are still missing after `attempts` (default 3), `pane_stream()`
+**raises** rather than returning short data, because a truncated listing looks
+exactly like a correct short one. On a very noisy console, quiet the log first:
+
+```sh
+dmesg -n 1     # on the host whose console is spamming
+```
+

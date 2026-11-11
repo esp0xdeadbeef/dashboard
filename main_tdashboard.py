@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import hashlib
 import string
 import sys
 import re
@@ -172,6 +174,161 @@ def get_output(pane,
         print(f"len of res: {len(res)}")
         print("wc output: " + run(["wc", location]).stdout)
     return res
+
+
+# --------------------------------------------------- checksummed transfer ---
+#
+# `pane_capture`/`get_output` read the *screen*. That is fine for a shell that
+# prints a few lines, and wrong for anything long or noisy:
+#
+#   * the screen is one windowful (~36 rows), so long output is silently
+#     truncated -- a `ps auxwwwww` with 190 rows yields 14;
+#   * a serial console (tio, minicom, a UART) has kernel messages interleaved
+#     into the stream at arbitrary points, mid-line;
+#   * "filter out the junk" does not work. Stripping non-base64 characters
+#     removes the junk AND the evidence, so a corrupted transfer decodes cleanly
+#     into a plausible wrong answer.
+#
+# So a long read is framed: every line carries a sequence number, the total, and
+# a checksum of its own payload. That makes each record verifiable on its own
+# AND makes a lost or split record detectable as a gap.
+#
+# A per-record checksum alone is NOT enough, which is easy to get wrong: when
+# junk splits a record in two, each half is still a self-consistent
+# `payload|checksum` pair, so validation passes on fragments and the result is
+# half-corrupted data. Only the sequence numbers expose that.
+#
+# The payload is base64 and the lines are short (-w 60) so that the console
+# width cannot auto-wrap a record into two lines at an arbitrary column.
+STREAM_RECORD = re.compile(r"^\s*(\d{1,7}):(\d{1,7}):([A-Za-z0-9+/=]{4,}):"
+                           r"([0-9a-f]{8})\s*$")
+
+
+def _stream_script(inner_cmd):
+    """Shell that emits <seq>:<total>:<b64-chunk>:<md5> per line of the stream.
+
+    `inner_cmd`'s output is base64-encoded as ONE stream and then wrapped at
+    60 columns, so a chunk is mid-stream and only the last one carries
+    padding -- decoding must therefore join all chunks first (see
+    pane_stream). Wrapping matters because the console is ~124 columns wide
+    and would otherwise insert its own breaks at arbitrary points.
+
+    The md5 is taken over `printf %s "$l" | base64 -w0`, i.e. the chunk
+    *re-encoded*, not the chunk text itself. The local side reproduces exactly
+    that (`base64.b64encode(payload)`); hashing the chunk directly instead
+    validates 0 of N records. Confirmed on the host:
+        printf %s cm9vdCAxIGluaXQ= | base64 -w0 | md5sum  ->  ebc79f2d
+        printf %s cm9vdCAxIGluaXQ= | md5sum              ->  fb86bd08
+    """
+    return (
+        f"{inner_cmd} | base64 -w 60 > /tmp/.dash_stream; "
+        "n=$(wc -l < /tmp/.dash_stream); i=0; "
+        "while read -r l; do i=$((i+1)); "
+        'echo "$i:$n:$l:$(printf %s "$l" | base64 -w0 | md5sum | cut -c1-8)"; '
+        "done < /tmp/.dash_stream"
+    )
+
+
+def pane_stream(pane, inner_cmd, location=None, attempts=3,
+                scrollback=12000, debugging=False):
+    """Run `inner_cmd` in `pane` and return its complete output, verified.
+
+    Use this instead of `get_output` whenever the output is longer than a
+    screen or the pane is a serial console. It is the only read path that is
+    correct on a wire, because it does not depend on the screen being clean.
+
+    Returns the decoded text. Raises `compat.CompatError` if every attempt
+    leaves records missing -- refusing rather than returning partial data is
+    the point: a truncated `ps` listing looks exactly like a correct short one.
+    """
+    last = "no attempt made"
+    for attempt in range(1, attempts + 1):
+        marker = f"STREAM{os.getpid()}{int(time.time() * 1000)}"
+        compat.send_keys(pane, f"echo {marker}_START; "
+                               + _stream_script(inner_cmd)
+                               + f"; echo {marker}_END")
+        compat.send_keys(pane, "C-m")
+        if not wait_untill_msg(pane, f"{marker}_END", timeout=180,
+                               time_out=0.5):
+            last = "end marker never appeared"
+            if debugging:
+                print(f"{{pane_stream}} attempt {attempt}: {last}")
+            continue
+
+        target = _pane_target(pane)
+        rc, out, _ = termstate.tmux_source().run(
+            "capture-pane", "-t", target, "-p", "-S", f"-{scrollback}")
+        if rc != 0:
+            last = "capture-pane failed"
+            continue
+        lines = out.splitlines()
+        ends = [i for i, l in enumerate(lines) if f"{marker}_END" in l]
+        if not ends:
+            last = "end marker not in capture"
+            continue
+        end = max(ends)
+        starts = [i for i, l in enumerate(lines[:end])
+                  if f"{marker}_START" in l]
+        body = lines[(max(starts) if starts else 0) + 1:end]
+
+        records, junk = {}, 0
+        for line in body:
+            m = STREAM_RECORD.match(line)
+            if not m:
+                junk += 1        # kernel spam or a prompt; harmless
+                continue
+            seq, total, payload, digest = m.groups()
+            # The board hashed `printf %s "$l" | base64 -w0`, i.e. the
+            # payload re-encoded as base64 with no trailing newline.
+            # Reproducing that byte-for-byte is the whole contract; hashing
+            # the decoded bytes instead silently validates 0 of N records.
+            want = hashlib.md5(
+                base64.b64encode(payload.encode())).hexdigest()[:8]
+            if want != digest:
+                junk += 1        # a damaged record; its seq will show as a gap
+                continue
+            records[int(seq)] = (payload, int(total))
+
+        totals = {t for _, t in records.values()}
+        if len(totals) != 1:
+            # Zero records means the command produced nothing (or failed);
+            # several different totals means records from different attempts
+            # were mixed. They are different problems and deserve different
+            # messages -- the first is usually the caller's command, not noise.
+            last = ("the command produced no output" if not totals
+                    else f"inconsistent totals {sorted(totals)}")
+            if debugging:
+                print(f"{{pane_stream}} attempt {attempt}: {last}")
+            continue
+        total = totals.pop()
+        missing = [i for i in range(1, total + 1) if i not in records]
+        if debugging:
+            print(f"{{pane_stream}} attempt {attempt}: got={len(records)}/"
+                  f"{total} junk={junk} missing={len(missing)}")
+        if missing:
+            last = f"{len(missing)} of {total} records missing"
+            continue
+
+        # Join the payloads, then decode once. The board base64-encodes the
+        # whole stream and *then* wraps it at 60 columns, so a 60-char chunk
+        # is mid-stream and cannot be decoded on its own: only the final line
+        # carries the padding. Decoding per line fails with "Excess data after
+        # padding" on any multi-line payload. Verified on the board:
+        #   printf 'a...a\n' | base64 -w 60  ->  60-char lines + a padded tail.
+        text = base64.b64decode(
+            "".join(records[i][0] for i in range(1, total + 1)),
+            validate=True).decode(errors="replace")
+        if location:
+            with open(location, "w") as fh:
+                fh.write(text)
+        return text
+    raise compat.CompatError(
+        f"pane_stream: could not read {inner_cmd!r} intact after {attempts} "
+        f"attempts ({last}). "
+        + ("Check that the command exists and prints something."
+           if last == "the command produced no output" else
+           "The pane's console is too noisy right now; re-run, or quiet the "
+           "kernel log with `dmesg -n 1` on that host."))
 
 
 def send_keys_to_pane(pane,

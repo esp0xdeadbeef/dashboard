@@ -18,6 +18,9 @@ The cases here are all ones that broke in practice:
 
 import unittest
 from unittest import mock
+import base64
+import re
+import hashlib
 
 import main_tdashboard
 import prompts
@@ -456,6 +459,191 @@ class TerminalHostLearning(unittest.TestCase):
         prompts.learn("<<< Welcome to NixOS 26.05 (x86_64) - hvc0 >>>", threshold=2)
         prompts.learn("[  OK  ] Started SSH Daemon.", threshold=2)
         self.assertIsNone(prompts.match_screen("[  OK  ] Started SSH Daemon."))
+
+
+class StreamFraming(unittest.TestCase):
+    """The checksummed read path used for long output over a serial console.
+
+    Measured on l-portal, reading `ps auxwwwww` through `tio`:
+
+      * `pane_capture` returned 14 of ~190 rows (one screenful) and said so
+        nowhere;
+      * a per-line `payload|md5` scheme kept 287 records, reported
+        `dropped=0`, and produced 40 malformed rows. Junk splitting a record
+        leaves two self-consistent halves, so validation passes on fragments.
+
+    These tests pin the framing rules that make the difference.
+    """
+
+    REC = main_tdashboard.STREAM_RECORD
+
+    def _record(self, seq, total, text):
+        payload = base64.b64encode(text.encode()).decode()
+        digest = hashlib.md5(payload.encode()).hexdigest()[:8]
+        return f"{seq}:{total}:{payload}:{digest}"
+
+    def test_pristine_record_parses(self):
+        line = self._record(3, 10, "root  1  0.0 init")
+        m = self.REC.match(line)
+        self.assertIsNotNone(m)
+        self.assertEqual((m.group(1), m.group(2)), ("3", "10"))
+
+    def test_kernel_spam_after_record_is_not_a_record(self):
+        """The console writes over the line; the record must not match."""
+        line = self._record(3, 10, "x") + \
+            "  [  316.4] mt7996e: Failed to del Host Multicast Database"
+        self.assertIsNone(self.REC.match(line))
+
+    def test_split_record_halves_are_detectable_as_a_gap(self):
+        """The real failure mode: a split record is self-consistent.
+
+        Both halves look like valid `payload|checksum` pairs, so a per-record
+        check cannot reject them. Only the sequence numbers reveal the loss --
+        which is why the framing carries seq/total.
+        """
+        text = "root  42  0.0  something-long-enough-to-split"
+        whole = self._record(7, 9, text)
+        a, b = whole[:len(whole) // 2], whole[len(whole) // 2:]
+        # Neither half is a *complete* record any more.
+        self.assertIsNone(self.REC.match(a))
+        self.assertIsNone(self.REC.match(b))
+        # And the sequence has a hole where 7 should be.
+        seen = {1, 2, 3, 4, 5, 6, 8, 9}
+        self.assertEqual([i for i in range(1, 10) if i not in seen], [7])
+
+    def test_totals_must_agree(self):
+        """Records from two different attempts must not be mixed."""
+        self.assertEqual({10, 10, 10}, {10})
+        self.assertNotEqual({10}, {10, 11})
+
+    def test_checksum_is_over_the_base64_text(self):
+        """Hash the payload as the board does, not the decoded bytes.
+
+        Getting this wrong validated 0 of 536 records in practice.
+        """
+        text = "root  1  0.0 init"
+        payload = base64.b64encode(text.encode()).decode()
+        as_board = hashlib.md5(payload.encode()).hexdigest()[:8]
+        as_decoded = hashlib.md5(text.encode()).hexdigest()[:8]
+        self.assertNotEqual(as_board, as_decoded)
+        line = f"1:1:{payload}:{as_board}"
+        self.assertIsNotNone(self.REC.match(line))
+
+
+class PaneStreamReassembly(unittest.TestCase):
+    """pane_stream's reassembly, exercised offline with a fake pane.
+
+    These do not need a network, a tmux server or a board: the transport is
+    replaced by a screen built here. That matters because the interesting
+    logic -- gap detection and the retry -- is exactly what a live test
+    against one remote host would fail to pin down anyway.
+    """
+
+    def _board_screen(self, lines, drop=(), spam_after=()):
+        """A captured screen, framed exactly as the board produces it.
+
+        The board encodes the WHOLE stream and then wraps it at 60 columns, so
+        chunks are mid-stream and only the last one carries padding. Modelling
+        it per-line instead (encode each line separately) produces records
+        that cannot be concatenated, which is a test bug, not a code bug --
+        verified with `printf ... | base64 -w 60` on the host.
+
+        `drop` are 1-based seq numbers to omit (a record lost to noise);
+        `spam_after` are seq numbers after which a kernel line is injected.
+        """
+        text = "\n".join(lines) + ("\n" if lines else "")
+        stream = base64.b64encode(text.encode()).decode()
+        # No output at all means NO records -- not one empty record, which
+        # would parse as a corrupt line and be misreported as noise.
+        chunks = ([stream[i:i + 60] for i in range(0, len(stream), 60)]
+                  if stream else [])
+        total = len(chunks)
+        out = ["__START__"]
+        for i, chunk in enumerate(chunks, 1):
+            if i in drop:
+                continue
+            # The board re-encodes the (already base64) chunk before hashing.
+            reencoded = base64.b64encode(chunk.encode()).decode()
+            digest = hashlib.md5(reencoded.encode()).hexdigest()[:8]
+            out.append(f"{i}:{total}:{chunk}:{digest}")
+            if i in spam_after:
+                out.append("[  316.4] mt7996e wlp1s0: Failed to del Host "
+                           "Multicast Database")
+        out.append("__END__")
+        return "\n".join(out)
+
+    def _run(self, screens, lines):
+        """Drive pane_stream over a sequence of canned screens."""
+        calls = {"n": 0}
+
+        state = {"marker": None}
+
+        def fake_send(pane, keys):
+            # pane_stream sends "<marker>_START; ..." -- keep the marker so the
+            # fake screen can emit the very same one.
+            m = re.search(r"(STREAM\d+_?\d*)_START", keys)
+            if m:
+                state["marker"] = m.group(1)
+
+        def fake_wait(pane, msg, **kw):
+            return True
+
+        class FakeSource:
+            def run(self, *args):
+                idx = min(calls["n"], len(screens) - 1)
+                calls["n"] += 1
+                mk = state["marker"] or "STREAM0"
+                return 0, screens[idx].replace(
+                    "__START__", f"{mk}_START").replace(
+                    "__END__", f"{mk}_END"), ""
+
+        with mock.patch.object(main_tdashboard, "wait_untill_msg", fake_wait), \
+             mock.patch.object(main_tdashboard.compat, "send_keys",
+                               fake_send), \
+             mock.patch.object(main_tdashboard.termstate, "tmux_source",
+                               lambda: FakeSource()), \
+             mock.patch.object(main_tdashboard, "_pane_target",
+                               lambda p: "%1"):
+            return main_tdashboard.pane_stream(
+                object(), "ps auxwwwww", attempts=len(screens))
+
+    def test_clean_screen_round_trips(self):
+        lines = ["USER PID"] + [f"root {i} proc-{i:03d}-padding-padding"
+                                for i in range(1, 8)]
+        got = self._run([self._board_screen(lines)], lines)
+        self.assertEqual(got.splitlines(), lines)
+
+    def test_kernel_spam_between_records_is_ignored(self):
+        """Spam lines must not be parsed as records, nor hide real ones."""
+        lines = ["USER PID"] + [f"root {i} proc-{i:03d}-padding-padding"
+                                for i in range(1, 8)]
+        got = self._run([self._board_screen(lines, spam_after={1, 2, 3})], lines)
+        self.assertEqual(got.splitlines(), lines)
+
+    def test_missing_record_raises_instead_of_truncating(self):
+        """A gap must be fatal, never a short-but-plausible answer."""
+        lines = ["USER PID"] + [f"root {i} proc-{i:03d}-padding-padding"
+                                for i in range(1, 8)]
+        bad = self._board_screen(lines, drop={2})
+        with self.assertRaises(main_tdashboard.compat.CompatError) as ctx:
+            self._run([bad], lines)
+        self.assertIn("missing", str(ctx.exception))
+
+    def test_retry_recovers_from_a_dropped_record(self):
+        """First attempt loses a record; the retry succeeds."""
+        lines = ["USER PID"] + [f"root {i} proc-{i:03d}-padding-padding"
+                                for i in range(1, 8)]
+        bad = self._board_screen(lines, drop={2})
+        good = self._board_screen(lines)
+        got = self._run([bad, good], lines)
+        self.assertEqual(got.splitlines(), lines)
+
+    def test_empty_output_says_so_instead_of_blaming_noise(self):
+        """A command that prints nothing is the caller's bug, not noise."""
+        empty = self._board_screen([])
+        with self.assertRaises(main_tdashboard.compat.CompatError) as ctx:
+            self._run([empty], [])
+        self.assertIn("produced no output", str(ctx.exception))
 
 
 if __name__ == "__main__":

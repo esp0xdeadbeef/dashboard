@@ -142,5 +142,17 @@
         });
 
       formatter = eachSystem (system: pkgs: pkgs.nixfmt);
+
+      # Expose the test suite as a check, so `nix flake check` actually runs
+      # it. Without this, `check --no-build` only proves the outputs evaluate
+      # and the tests are only run if someone happens to know about .#ci.
+      checks = eachSystem (system: pkgs: {
+        inherit (self.packages.${system}) ci;
+        # `nix flake check` expects every check to be a derivation; the
+        # package build is the cheapest proof that the wrapped script and its
+        # Python environment are intact.
+        dashboard = self.packages.${system}.dashboard;
+        default = self.packages.${system}.ci;
+      });
     };
 }
