@@ -17,6 +17,7 @@ The cases here are all ones that broke in practice:
 """
 
 import unittest
+from unittest import mock
 
 import main_tdashboard
 import prompts
@@ -263,6 +264,50 @@ class TerminalHost(unittest.TestCase):
     def test_qemu_is_a_terminal_host(self):
         self.assertTrue(termstate._is_terminal_host("qemu-system-x8"))
         self.assertFalse(termstate._is_terminal_host("bash"))
+
+    def test_terminal_host_comes_from_the_chain_not_tmux(self):
+        """`is_terminal_host` must read `/proc`, not `pane_current_command`.
+
+        Measured 2026-11-11 on the HAT cobalt fixture: the pane's chain was
+        `zsh > .nixos-shell-wr > .qemu-system-x8` while tmux reported
+        `pane_current_command=bash`. The old body trusted tmux, answered False,
+        skipped the redraw probe, and `at_end` reported "not at the guest
+        shell" for a guest sitting at its prompt -- so the acceptance probe
+        typed into the wrong place and reported FAIL.
+
+        The fake `pane_info` reproduces exactly that disagreement.
+        """
+        chain = {2415971: "zsh", 2416227: ".nixos-shell-wr", 2441104: ".qemu-system-x8"}
+        fake_state = termstate.PaneState(
+            state=termstate.State.READY,
+            reason="fake",
+            pid=2441104,
+            comm=chain[2441104],
+            chain=(2415971, 2416227, 2441104),
+        )
+        with mock.patch.object(termstate, "pane_state", return_value=fake_state), \
+             mock.patch.object(termstate, "_comm_of", side_effect=chain.get), \
+             mock.patch.object(
+                 termstate, "pane_info",
+                 return_value=termstate.PaneInfo(
+                     target="%1", pid=2415971, tty="/dev/pts/0",
+                     command="bash", width=80, height=24,
+                 ),
+             ):
+            self.assertTrue(
+                termstate.is_terminal_host("%1"),
+                "a QEMU pane must be a terminal host even when tmux reports the "
+                "pane's original shell as pane_current_command",
+            )
+
+    def test_plain_shell_pane_is_not_a_terminal_host(self):
+        fake_state = termstate.PaneState(
+            state=termstate.State.READY, reason="fake", pid=10, comm="bash",
+            chain=(10,),
+        )
+        with mock.patch.object(termstate, "pane_state", return_value=fake_state), \
+             mock.patch.object(termstate, "_comm_of", side_effect={10: "bash"}.get):
+            self.assertFalse(termstate.is_terminal_host("%1"))
 
     # These exercise the rule directly rather than a live pane: a live pane's
     # contents (and which prompt it happens to show) change between runs.

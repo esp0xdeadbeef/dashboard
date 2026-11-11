@@ -588,11 +588,26 @@ def is_terminal_host(target: str) -> bool:
     answered by process state. Cheap enough to call before capturing
     (one tmux query), and the caller needs to know in order to avoid sending a
     probe keystroke into an ordinary shell pane.
+
+    The answer comes from the `/proc` chain, not from tmux's
+    `pane_current_command`: tmux reports the shell the pane was *created* with,
+    not what is running in it. Measured 2026-11-11 on the HAT cobalt fixture, a
+    pane whose chain was `zsh > .nixos-shell-wr > .qemu-system-x8` reported
+    `pane_current_command=bash`. Since this predicate gates the redraw probe,
+    the guest prompt was never looked for, `at_end` always answered False, and
+    `scripts/hat-isp.py core cobalt` reported FAIL on a guest that was sitting
+    at `root@isp-cobalt:~/github/network-site-esp/ >` the whole time.
+
+    `pane_state` already computes the chain (and already uses it for
+    `describe`), so this asks the same source rather than adding a second,
+    disagreeing one.
     """
-    info = pane_info(target)
-    if info is None:
-        return False
-    return _is_terminal_host(info.command)
+    state = pane_state(target)
+    if _is_terminal_host(state.comm):
+        return True
+    # A wrapper (`.nixos-shell-wr`) can sit *above* the terminal host, so the
+    # deepest comm alone is not enough; scan the whole ancestry.
+    return any(_is_terminal_host(_comm_of(pid)) for pid in state.chain)
 
 
 def pane_state(target: str, rescan: bool = True, expect_host: str | None = None,
