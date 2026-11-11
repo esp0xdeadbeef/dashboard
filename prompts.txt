@@ -95,5 +95,18 @@ root-shell	shell	^[^\s]*➜\s*\S*\s*$
 user-shell	shell	^[^\s]*\$\s*$
 user-shell	shell	^\[[^]]+\][#$]\s*
 user-shell	shell	^[^\s]*%\s*$
+# `user@host <cwd> >` -- the shape stock bash/zsh produce with a bare `\u@\h:\w\$`
+# PS1, i.e. what a NixOS VM or a nixos-shell guest actually shows:
+#
+#   root@isp-cobalt:~/ >
+#
+# The generic catches above and below use `^[^\s]*` as the whole prefix, so a
+# prompt with a SPACE in it before the final sigil matches none of them. That is
+# not cosmetic: `pane_state` then reports "hosts a terminal; no prompt on
+# screen" for a guest sitting at its prompt, `is_at_guest_shell` answers False,
+# and every HAT verb refuses to type -- measured 2026-11-11 on the cobalt
+# fixture, where the prompt was on screen and `_stable_prompt` agreed it was
+# stable while the table matched nothing.
+user-at-host-shell	shell	^[^\s@]+@[^\s]+\s+\S*\s*[>#$%]\s*$
 fish-shell	shell	^[^\s]*>\s*$
 shell	shell	^[^\s]*[>#$%]\s*$

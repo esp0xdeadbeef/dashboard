@@ -261,6 +261,37 @@ class WaitForMessage(unittest.TestCase):
 class TerminalHost(unittest.TestCase):
     """A pane whose foreground program hosts another terminal."""
 
+    def test_user_at_host_prompt_is_a_shell(self):
+        """`user@host <cwd> >` must match: it is what stock bash/zsh emit.
+
+        Every generic catch in prompts.txt used `^[^\\s]*` as the whole
+        prefix, so a prompt with a space before the sigil matched nothing:
+
+          $ prompts.match_line('root@isp-cobalt:~/ >')
+          None
+
+        Measured 2026-11-11 on the cobalt HAT: `pane_state` then answered
+        "hosts a terminal; no prompt on screen" for a guest sitting at exactly
+        that prompt, while `_stable_prompt` could see it was stable. The
+        disagreement made `is_at_guest_shell` false and every HAT verb refused
+        to type into a healthy VM.
+        """
+        for line in (
+            "root@isp-cobalt:~/ >",
+            "root@isp-cobalt:/ #",
+            "user@host:~$",
+            "user@host /var/log %",
+        ):
+            m = prompts.match_line(line)
+            self.assertIsNotNone(m, f"{line!r} must be recognised as a prompt")
+            self.assertEqual(m.kind, "shell", f"{line!r} must be a shell prompt")
+
+    def test_bracketed_and_nested_prompts_keep_their_match(self):
+        """The new pattern must not shadow the more specific ones."""
+        self.assertEqual(prompts.match_line("[root@host ~]#").tool, "user-shell")
+        self.assertEqual(prompts.match_line("msf6 >").tool, "metasploit")
+        self.assertEqual(prompts.match_line("(qemu)").tool, "qemu-monitor")
+
     def test_qemu_is_a_terminal_host(self):
         self.assertTrue(termstate._is_terminal_host("qemu-system-x8"))
         self.assertFalse(termstate._is_terminal_host("bash"))
