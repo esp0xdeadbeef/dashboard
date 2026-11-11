@@ -16,30 +16,9 @@
         "type": "github"
       }
     },
-    "pi-tmux-nudge": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1793804193,
-        "narHash": "sha256-z9+wIiB1kvFpX8nQwb3N6RHF6NO8AY/nStXyV1daYOg=",
-        "owner": "esp0xdeadbeef",
-        "repo": "pi-tmux-nudge",
-        "rev": "6b9f10cbe1b1ec2a032dd13d64f14c97c91943ad",
-        "type": "github"
-      },
-      "original": {
-        "owner": "esp0xdeadbeef",
-        "repo": "pi-tmux-nudge",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
-        "pi-tmux-nudge": "pi-tmux-nudge"
+        "nixpkgs": "nixpkgs"
       }
     }
   },

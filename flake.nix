@@ -3,18 +3,9 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Companion tool: keeps idle agents in tmux panes moving. Shell-only, so
-    # it is consumed as a package rather than a Python dependency.
-    # Override for a local checkout:
-    #   nix develop --override-input pi-tmux-nudge /path/to/pi-tmux-nudge
-    pi-tmux-nudge = {
-      url = "github:esp0xdeadbeef/pi-tmux-nudge";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, pi-tmux-nudge }:
+  outputs = { self, nixpkgs }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       eachSystem = f: nixpkgs.lib.genAttrs systems (system:
@@ -98,17 +89,6 @@
           program = "${self.packages.${system}.dashboard}/bin/tmux-dashboard";
         };
 
-        # Keeps idle pi agents moving; provided by the companion flake.
-        nudge = {
-          type = "app";
-          program = "${pi-tmux-nudge.packages.${system}.default}/bin/pi-tmux-nudge";
-        };
-
-        detect = {
-          type = "app";
-          program = "${pi-tmux-nudge.packages.${system}.default}/bin/pi-tmux-detect";
-        };
-
         default = dashboard;
       });
 
@@ -123,7 +103,6 @@
               pkgs.tmux
               pkgs.shellcheck
               pkgs.python3Packages.pytest
-              pi-tmux-nudge.packages.${system}.default
             ];
 
             shellHook = ''
@@ -135,7 +114,6 @@
               echo "tmux-dashboard dev shell"
               echo "  tmux-dashboard -i scripts --session-file scripts/1_session.py"
               echo "  tmux-dashboard --check --target HOST   # can I drive HOST?"
-              echo "  pi-tmux-nudge -k        # keep idle agents moving"
               echo "  pytest -q"
             '';
           };
