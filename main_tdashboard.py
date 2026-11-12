@@ -1101,6 +1101,13 @@ def checked_cmd(pane,
 
     Completion is decided by the prompt returning (through `at_end`), not by a
     timer, with `complete_timeout` as a bound so a hung command still surfaces.
+
+    A pipeline's status is the *last* stage's, so `a | b` reports success when
+    `a` failed -- `gh run list ... | xargs -r gh run watch` printed
+    `=== ci exit=0` for a run that was never watched (measured 2026-11-12 with
+    the GitHub quota exhausted). Nothing here rewrites the caller's command, so
+    a caller that needs the first stage's failure must ask for it: prefix with
+    `set -o pipefail;` (or use `${PIPESTATUS[0]}`).
     """
     while 1:
         try:
