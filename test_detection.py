@@ -1061,6 +1061,42 @@ class LauncherExited(unittest.TestCase):
             "error: killed by signal",
         )
 
+    def test_a_live_terminal_host_in_the_chain_is_not_reported(self):
+        """A VM alive in the pane's chain must not read as an exited launcher.
+
+        A replaced pane can carry an OLD run's `error: interrupted by the user`
+        in its scrollback while a live `qemu-system` still sits in the pane's
+        own process chain (shell > nixos-shell > qemu). The marker is then not
+        proof the run ended. Measured 2026-11-12: QEMU live, `start` said
+        `launcher exited`.
+        """
+        real = termstate.tmux_source
+
+        class StaticSource:
+            def run(self, *args):
+                return 0, ("error: interrupted by the user\n$ "), ""
+
+        termstate.set_tmux_source(StaticSource())
+        self.addCleanup(termstate.set_tmux_source, real)
+        real_info = termstate.pane_info
+        real_chain = termstate.process_chain
+        real_comm = termstate._comm_of
+        termstate.pane_info = lambda t: termstate.PaneInfo(
+            target=t, pid=100, tty="/dev/pts/0", command="bash",
+            width=80, height=24)
+        termstate.process_chain = lambda pid: [100, 200, 300]
+        chain = {100: "zsh", 200: ".nixos-shell-wr", 300: ".qemu-system-x8"}
+        termstate._comm_of = lambda pid: chain.get(pid, "?")
+        self.addCleanup(setattr, termstate, "pane_info", real_info)
+        self.addCleanup(setattr, termstate, "process_chain", real_chain)
+        self.addCleanup(setattr, termstate, "_comm_of", real_comm)
+
+        self.assertIsNone(
+            termstate.launcher_exited("%0"),
+            "a live QEMU in the chain means the run is alive, whatever the "
+            "scrollback says",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

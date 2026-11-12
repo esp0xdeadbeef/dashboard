@@ -646,8 +646,41 @@ def launcher_exited(target: str, scroll: int = 60) -> str | None:
         last_launch = max(
             (text.rfind(line) for line in LAUNCH_LINES), default=-1)
         if last_marker > last_launch:
+            # A marker in scrollback is only proof the *pane's* job ended. A
+            # launcher whose pane was replaced (session killed and recreated)
+            # leaves its marker behind in the new shell's scrollback while its
+            # VM process is still alive -- measured 2026-11-12: `qemu-system
+            # ... isp-cobalt.qcow2` running with a live nixos-shell parent, yet
+            # `start` reported "launcher exited". If a terminal host is still
+            # running, the run is alive regardless of what this pane shows.
+            if _terminal_host_running(target):
+                return None
             return marker
     return None
+
+
+def _terminal_host_running(target: str) -> bool:
+    """True when a terminal-host process is alive in *this pane's* chain.
+
+    Scope is deliberately the pane's own ancestry, not the whole machine: `tmux`,
+    `screen` and `socat` are themselves terminal hosts, so a machine-wide scan
+    finds one on every host and would answer "running" forever. The question
+    this answers is "did the launcher in this pane really go away", and a live
+    QEMU that the pane can still see (its own child, or the wrapper above it) is
+    the only evidence the pane itself can offer. A VM orphaned by a killed
+    session is invisible here by construction, so callers that need that must
+    ask the machine (`start`/`stop` in the HAT), not the pane.
+    """
+    try:
+        info = pane_info(target)
+        if info is None:
+            return False
+        for pid in (info.pid, *process_chain(info.pid)):
+            if _is_terminal_host(_comm_of(pid)):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def is_terminal_host(target: str) -> bool:
