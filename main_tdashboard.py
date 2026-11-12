@@ -938,6 +938,51 @@ class PaneBusy(Exception):
     """The pane never reached a terminal state inside the caller's budget."""
 
 
+def _pane_output(pane):
+    """Output of the job that just finished: the screen minus what was there.
+
+    `baseline` is the pane's screen captured when the wait started. Everything
+    up to and including the last line of that baseline is prior content (old
+    output, the previous prompt); the command's echo and its output are what
+    appeared after it. Framing (prompts, prompt chrome, wrapped prompt
+    fragments) is then dropped line by line, so an empty result means the
+    command printed nothing.
+    """
+    lines = [ln.rstrip() for ln in compat.capture_pane(pane, start="-40")]
+    try:
+        import prompts as _prompts
+    except Exception:
+        _prompts = None
+
+    def is_framing(ln):
+        text = ln.strip()
+        if not text:
+            return True
+        if text[0] in "\u2500\u250c\u2514\u2502\u251c\u250f\u2570\u256d\u2571\u2572\u2550":
+            return True
+        if text.endswith("]") and len(text) <= 24 and any(c.isdigit() for c in text):
+            return True
+        if "\u2514\u2500" in text or "\u250c\u2500" in text:
+            return True
+        if _prompts is not None:
+            stripped = _prompts.strip_console_noise(text)
+            if _prompts.match_line(stripped) is not None:
+                return True
+        return False
+
+    i = len(lines) - 1
+    while i >= 0 and is_framing(lines[i]):
+        i -= 1
+    end_nonframing = i
+    block = []
+    while i >= 0 and not is_framing(lines[i]):
+        block.append(lines[i])
+        i -= 1
+    block.reverse()
+
+    return "\n".join(block).strip()
+
+
 def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
                    expect_host=None, grace=2.0):
     """Block until the pane's foreground job finishes; return the exit line.
@@ -956,8 +1001,16 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
     exists to prevent. For a terminal host the probe is required, so it is
     always requested here.
 
-    Returns the last non-empty screen line so the caller can quote what it saw;
-    raises `PaneBusy` when the budget runs out.
+    Returns the job's output: the screen block between the echoed command and
+    the prompt it returned to, with prompt chrome removed. It used to return the
+    prompt line itself (measured 2026-11-12: `'\u2514\u2500[%]'`), which could
+    not tell "printed nothing" from "printed something".
+
+    One ambiguity remains by construction: a command that prints *nothing*
+    leaves only its echoed line, which is indistinguishable from one line of
+    output without knowing what was typed. Use `wait_pane_output(pane, cmd)`
+    when you control the command and need an exact answer. Raises `PaneBusy`
+    when the budget runs out.
 
     A launcher that exited is a finish, not a hang: `termstate.launcher_exited`
     says which, and the caller can tell the cases apart from the returned text.
@@ -986,11 +1039,9 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
         if not ready:
             seen_busy = True
         elif seen_busy or (time.monotonic() - start) >= grace:
-            tail = [ln for ln in compat.capture_pane(pane, start="-12")
-                    if ln.strip()]
-            return tail[-1].rstrip() if tail else ""
+            return _pane_output(pane)
         if termstate.launcher_exited(target):
-            tail = [ln for ln in compat.capture_pane(pane, start="-12")
+            tail = [ln for ln in compat.capture_pane(pane, start="-24")
                     if ln.strip()]
             return tail[-1].rstrip() if tail else ""
         time.sleep(poll)
@@ -998,6 +1049,24 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
         f"pane {target} was still busy after {timeout:.0f}s: "
         f"{termstate.describe(target)}"
     )
+
+
+def wait_pane_output(pane, inner_cmd, timeout=120, **kwargs):
+    """Run `inner_cmd` in `pane` and return its output, verified.
+
+    `wait_pane_idle` answers "has the job in this pane finished" and returns the
+    output block it can see. That is ambiguous for a command that prints
+    nothing: the echoed command line is indistinguishable from one line of
+    output without knowing what was typed (measured 2026-11-12). This is the
+    unambiguous alternative: it types the command with a marker-framed pipe
+    (`pane_stream`) so "="" (printed nothing) and "=echo text" never collide.
+
+    Use `wait_pane_idle` when the job was started by someone else (a `spawn_*`
+    or an agent) and you only need to block; use this when you control the
+    command and want its result.
+    """
+    pane = _as_pane(pane)
+    return pane_stream(pane, inner_cmd, **kwargs)
 
 
 def checked_cmd(pane,

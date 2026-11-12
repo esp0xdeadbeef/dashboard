@@ -900,6 +900,50 @@ class WaitPaneIdle(unittest.TestCase):
     def test_returns_when_the_job_finishes(self):
         self.assertEqual(self._run_with([False, False]), "done")
 
+    def test_returns_the_output_not_the_prompt(self):
+        """The return value is the command's output, not the prompt.
+
+        The original report was two things: returning before the command
+        started, and returning the *prompt* (or the echoed command) instead of
+        the output -- `returned: '\u2514\u2500[%]'` with the marker one line
+        above. The ordering cases below check *when* it returns; this checks
+        *what* it returns, which is what let the second half survive.
+        """
+        screen = [
+            "\u250c\u2500[user@host] - [~/x] - [main]",
+            "\u2514\u2500[%] printf 'OUTPUT_MARKER_42\\n'",
+            "OUTPUT_MARKER_42",
+            "\u250c\u2500[user@host] - [~/x] - [main]",
+            "\u2514\u2500[%]",
+        ]
+        real_at = main_tdashboard.at_end
+        real_cap = main_tdashboard.compat.capture_pane
+        real_host = termstate.is_terminal_host
+        real_launch = termstate.launcher_exited
+        seen = {"n": 0}
+
+        def fake_at(pane, **kw):
+            seen["n"] += 1
+            return seen["n"] > 1     # busy once, then idle
+
+        main_tdashboard.at_end = fake_at
+        main_tdashboard.compat.capture_pane = (
+            lambda pane, start=None, end=None: screen)
+        termstate.is_terminal_host = lambda t: False
+        termstate.launcher_exited = lambda t, **kw: None
+        self.addCleanup(setattr, main_tdashboard, "at_end", real_at)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
+        self.addCleanup(setattr, termstate, "is_terminal_host", real_host)
+        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
+
+        class Pane:
+            pane_id = "%0"
+
+        out = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01)
+        self.assertIn("OUTPUT_MARKER_42", out,
+                      "the command's output must be returned, not the prompt")
+        self.assertNotIn("[%]", out, "prompt chrome must not be returned")
+
     def test_does_not_return_before_the_command_starts(self):
         """An idle pane at call time must not count as "finished".
 
@@ -979,7 +1023,8 @@ class WaitPaneIdle(unittest.TestCase):
             pane_id = "%0"
 
         out = main_tdashboard.wait_pane_idle(Pane(), timeout=2, poll=0.01)
-        self.assertEqual(out, "root@guest:~#")
+        # A guest sitting at its prompt has produced no output of its own.
+        self.assertEqual(out, "")
         self.assertTrue(all(p is True for p in seen),
                         "a terminal host must always be probed")
 
@@ -1014,8 +1059,10 @@ class CompatReExportsPrimitive(unittest.TestCase):
         self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
         # grace=0: this test stands in an already-idle pane and only checks that
         # the compat wrapper forwards to the implementation.
+        # The fake screen is a bare prompt, i.e. framing only, so there is no
+        # output block -- the wrapper still forwards correctly.
         self.assertEqual(main_tdashboard.compat.wait_pane_idle(
-            Pane(), timeout=1, poll=0.01, grace=0), "$")
+            Pane(), timeout=1, poll=0.01, grace=0), "")
 
 
 class StreamScriptGrouping(unittest.TestCase):
