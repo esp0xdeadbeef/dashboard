@@ -945,14 +945,19 @@ class PaneBusy(Exception):
 
 
 def _pane_output(pane):
-    """Output of the job that just finished: the screen minus what was there.
+    """The output of the job that finished, anchored on its echoed command line.
 
-    `baseline` is the pane's screen captured when the wait started. Everything
-    up to and including the last line of that baseline is prior content (old
-    output, the previous prompt); the command's echo and its output are what
-    appeared after it. Framing (prompts, prompt chrome, wrapped prompt
-    fragments) is then dropped line by line, so an empty result means the
-    command printed nothing.
+    The pane shows the command being run as a prompt line carrying it
+    (`\u2514\u2500[%] echo hi`), then the output, then the prompt again. The output
+    is what lies between the *last* such echo and the end of the screen, with
+    prompt chrome removed. Anchoring on the echo is what makes a silent command
+    return "" instead of the previous command's output: `true` has an echo line
+    and nothing after it (measured 2026-11-12: it returned `'SECOND_OUTPUT'`,
+    the previous command's result).
+
+    A baseline diff cannot do this job: the baseline has to be captured when the
+    wait starts, which is already after the command was typed, so its own echo is
+    inside the baseline.
     """
     lines = [ln.rstrip() for ln in compat.capture_pane(pane, start="-40")]
     try:
@@ -960,33 +965,51 @@ def _pane_output(pane):
     except Exception:
         _prompts = None
 
-    def is_framing(ln):
-        text = ln.strip()
+    def is_chrome(text):
         if not text:
             return True
         if text[0] in "\u2500\u250c\u2514\u2502\u251c\u250f\u2570\u256d\u2571\u2572\u2550":
             return True
         if text.endswith("]") and len(text) <= 24 and any(c.isdigit() for c in text):
             return True
-        if "\u2514\u2500" in text or "\u250c\u2500" in text:
-            return True
+        return False
+
+    def is_echo(text):
+        # "<prompt chrome> <typed command>" -- the prompt line that carries the
+        # command. It is the only line that both contains prompt chrome and has
+        # more text after it.
+        if not is_chrome(text) and "\u2514\u2500" not in text and "\u250c\u2500" not in text:
+            return False
         if _prompts is not None:
-            stripped = _prompts.strip_console_noise(text)
-            if _prompts.match_line(stripped) is not None:
+            m = _prompts.match_line(text)
+            if m is not None and text.strip() != m.line.strip():
+                return True
+        # `└─[%] echo hi`: chrome then a command
+        for sigil in ("[%] ", "[#] ", "$ ", "# ", "% "):
+            if sigil in text and text.strip().endswith(tuple("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'\"/.-_= ")) and len(text.split(sigil)[-1].strip()) > 0:
                 return True
         return False
 
-    i = len(lines) - 1
-    while i >= 0 and is_framing(lines[i]):
-        i -= 1
-    end_nonframing = i
-    block = []
-    while i >= 0 and not is_framing(lines[i]):
-        block.append(lines[i])
-        i -= 1
-    block.reverse()
+    # Last echoed command line; its output follows.
+    start_idx = 0
+    for i in range(len(lines) - 1, -1, -1):
+        if is_echo(lines[i]):
+            start_idx = i + 1
+            break
 
-    return "\n".join(block).strip()
+    body = []
+    for ln in lines[start_idx:]:
+        text = ln.strip()
+        if not text:
+            continue
+        if is_chrome(text) or is_echo(text):
+            continue
+        if _prompts is not None:
+            stripped = _prompts.strip_console_noise(text)
+            if _prompts.match_line(stripped) is not None:
+                continue
+        body.append(ln)
+    return "\n".join(body).strip()
 
 
 def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,

@@ -929,6 +929,54 @@ class WaitPaneIdle(unittest.TestCase):
         out = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01)
         self.assertNotIn("[%]", out, "prompt chrome must never be returned")
 
+    def test_two_sequential_commands_do_not_bleed(self):
+        """A silent command after a chatty one returns '', not the old output.
+
+        Every case in this class stands in a mock screen; none ran two real
+        sequential commands, which is why `_pane_output` was allowed to return
+        the *previous* command's output (measured 2026-11-12: `true` returned
+        'SECOND_OUTPUT').
+        """
+        screens = [
+            # after `echo FIRST_OUTPUT`
+            ["\u2514\u2500[%] echo FIRST_OUTPUT", "FIRST_OUTPUT", "\u2514\u2500[%]"],
+            # after `echo SECOND_OUTPUT`
+            ["\u2514\u2500[%] echo SECOND_OUTPUT", "SECOND_OUTPUT", "\u2514\u2500[%]"],
+            # after `true` -- echo only, no output
+            ["\u2514\u2500[%] true", "\u2514\u2500[%]"],
+        ]
+        real_at = main_tdashboard.at_end
+        real_cap = main_tdashboard.compat.capture_pane
+        real_host = termstate.is_terminal_host
+        real_launch = termstate.launcher_exited
+        seq = list(screens)
+
+        def fake_at(pane, **kw):
+            return True
+
+        main_tdashboard.at_end = fake_at
+        main_tdashboard.compat.capture_pane = (
+            lambda pane, start=None, end=None: seq.pop(0) if seq else ["\u2514\u2500[%]"])
+        termstate.is_terminal_host = lambda t: False
+        termstate.launcher_exited = lambda t, **kw: None
+        self.addCleanup(setattr, main_tdashboard, "at_end", real_at)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
+        self.addCleanup(setattr, termstate, "is_terminal_host", real_host)
+        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
+
+        class Pane:
+            pane_id = "%0"
+
+        first = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01, grace=0)
+        second = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01, grace=0)
+        third = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01, grace=0)
+        self.assertEqual(first, "FIRST_OUTPUT")
+        self.assertEqual(second, "SECOND_OUTPUT")
+        self.assertNotIn("FIRST_OUTPUT", second,
+                         "the second result must not contain the first's output")
+        self.assertEqual(third, "",
+                         "a silent command must return '', not the previous output")
+
     def test_returns_the_output_not_the_prompt(self):
         """The return value is the command's output, not the prompt.
 
