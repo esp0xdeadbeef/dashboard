@@ -581,6 +581,39 @@ def _is_terminal_host(comm: str | None) -> bool:
     return any(name.startswith(h) for h in TERMINAL_HOSTS)
 
 
+# Output a launcher leaves behind when it is interrupted before it starts the
+# thing it was going to start. `nixos-shell` prints the first; the rest are the
+# generic "the command never ran" forms.
+LAUNCHER_EXIT_MARKERS = (
+    "error: interrupted by the user",
+    "error: killed by signal",
+)
+
+
+def launcher_exited(target: str, scroll: int = 60) -> str | None:
+    """The launcher's exit line if it died before starting, else None.
+
+    A pane whose foreground program returns to the shell is not necessarily
+    "ready": for a launcher like `nixos-shell` it means the guest was never
+    started, or was torn down. Every detection path in this module answers
+    "is the foreground program blocked reading the terminal", which is equally
+    true of the idle shell left behind -- so a crashed run reported READY, and
+    a caller waiting for the guest waited out its whole timeout against a
+    process that no longer existed.
+
+    Measured 2026-11-12: Ctrl-C in the HAT pane printed
+    `error: interrupted by the user`, `start cobalt` polled for 1500 s, and the
+    pane reported `READY ... chain=[zsh]` throughout.
+
+    Returning the marker (rather than a bool) lets the caller quote it.
+    """
+    text = capture(target, scroll=scroll)
+    for marker in LAUNCHER_EXIT_MARKERS:
+        if marker in text:
+            return marker
+    return None
+
+
 def is_terminal_host(target: str) -> bool:
     """True when the pane's foreground program hosts another terminal.
 

@@ -646,5 +646,57 @@ class PaneStreamReassembly(unittest.TestCase):
         self.assertIn("produced no output", str(ctx.exception))
 
 
+class LauncherExited(unittest.TestCase):
+    """A foreground launcher that died must not read as "ready".
+
+    The HAT runs its guest through `nixos-shell`. Ctrl-C in that pane prints
+    `error: interrupted by the user` and returns to the shell it was launched
+    from. Every other detection path asks "is the foreground program blocked
+    reading the terminal", which is true of that idle shell -- so a crashed run
+    reported READY and the caller polled for a guest that could never appear.
+    Measured 2026-11-12: `start cobalt` waited out a 1500 s timeout.
+    """
+
+    def _with_screen(self, lines):
+        text = "\n".join(lines)
+
+        class StaticSource:
+            def run(self, *args):
+                return 0, text, ""
+
+        real = termstate.tmux_source
+        termstate.set_tmux_source(StaticSource())
+        self.addCleanup(termstate.set_tmux_source, real)
+        return termstate.launcher_exited("%0")
+
+    def test_interrupted_launcher_is_reported(self):
+        marker = self._with_screen([
+            "$ nixos-shell ./cobalt.nix",
+            "error: interrupted by the user",
+            "$ ",
+        ])
+        self.assertEqual(marker, "error: interrupted by the user")
+
+    def test_a_running_launcher_is_not_reported(self):
+        self.assertIsNone(self._with_screen([
+            "$ nixos-shell ./cobalt.nix",
+            "[17/21 built, 3 copied (13.7 MiB)]",
+        ]))
+
+    def test_a_guest_at_its_prompt_is_not_reported(self):
+        """The normal running state: the guest shell, nothing interrupted."""
+        self.assertIsNone(self._with_screen([
+            "$ nixos-shell ./cobalt.nix",
+            "root@isp-cobalt:~# ",
+        ]))
+
+    def test_killed_by_signal_is_reported(self):
+        self.assertEqual(
+            self._with_screen(["$ nixos-shell ./x.nix",
+                               "error: killed by signal 9"]),
+            "error: killed by signal",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
