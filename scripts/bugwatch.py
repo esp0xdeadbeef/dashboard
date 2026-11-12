@@ -30,10 +30,12 @@ import sys
 import time
 
 DIRECTORY = "/home/deadbeef/github/dashboard"
-ONCE = False
+ONCE = True  # exit on the first reported event by default
 for arg in sys.argv[1:]:
     if arg == "--once":
         ONCE = True
+    elif arg == "--follow":
+        ONCE = False
     else:
         DIRECTORY = arg
 
