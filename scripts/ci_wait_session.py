@@ -2,9 +2,10 @@
 """Run a CI watch in a pane and block until it really finishes.
 
 Exercises `checked_cmd`, the dashboard primitive that sends a command and waits
-for its end marker. That is the right primitive here: `wait_pane_idle` alone
-returns on the first idle sample, which for a freshly spawned pane is the shell
-*before* the command has started, so it reports "finished" immediately.
+for its end marker. That is the right primitive here because it reports the
+*command's* completion; `wait_pane_idle` blocks on the pane's foreground job
+(and since 63abf78 also requires the job to be seen running first), which is the
+wrong question when the pane may not have started the job yet.
 
 Environment:
     CI_WATCH_REPO  checkout to watch (default ~/github/network-labs)
