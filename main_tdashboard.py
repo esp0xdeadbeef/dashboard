@@ -934,6 +934,12 @@ def _stable_prompt(pane, debugging=False):
     return False
 
 
+# Prefix for the value `wait_pane_idle` returns when it stops because the
+# launcher died rather than because a job produced output. A caller can test
+# `value.startswith(LAUNCHER_EXIT_PREFIX)` and quote the rest.
+LAUNCHER_EXIT_PREFIX = "launcher exited: "
+
+
 class PaneBusy(Exception):
     """The pane never reached a terminal state inside the caller's budget."""
 
@@ -1006,6 +1012,10 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
     prompt line itself (measured 2026-11-12: `'\u2514\u2500[%]'`), which could
     not tell "printed nothing" from "printed something".
 
+    If the launcher itself died (an interrupted `nixos-shell`), the value is
+    `LAUNCHER_EXIT_PREFIX + <the launcher's exit line>`, so it cannot be confused
+    with a command that printed that text.
+
     One ambiguity remains by construction: a command that prints *nothing*
     leaves only its echoed line, which is indistinguishable from one line of
     output without knowing what was typed. Use `wait_pane_output(pane, cmd)`
@@ -1040,10 +1050,14 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
             seen_busy = True
         elif seen_busy or (time.monotonic() - start) >= grace:
             return _pane_output(pane)
-        if termstate.launcher_exited(target):
-            tail = [ln for ln in compat.capture_pane(pane, start="-24")
-                    if ln.strip()]
-            return tail[-1].rstrip() if tail else ""
+        marker = termstate.launcher_exited(target)
+        if marker:
+            # A launcher that died is a *finish*, not output. The marker is what
+            # the caller should quote, but it must not be mistaken for a command
+            # result, so it is prefixed with a documented sentinel -- the two
+            # return shapes were otherwise indistinguishable (measured
+            # 2026-11-12 by the cross-repo audit).
+            return f"{LAUNCHER_EXIT_PREFIX}{marker}"
         time.sleep(poll)
     raise PaneBusy(
         f"pane {target} was still busy after {timeout:.0f}s: "

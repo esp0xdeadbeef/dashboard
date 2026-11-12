@@ -900,6 +900,35 @@ class WaitPaneIdle(unittest.TestCase):
     def test_returns_when_the_job_finishes(self):
         self.assertEqual(self._run_with([False, False]), "done")
 
+    def test_empty_print_returns_empty_string(self):
+        """A command that prints nothing returns '', not its echoed line."""
+        screen = ["\u2514\u2500[%] printf ''", "\u2514\u2500[%]"]
+        real_at = main_tdashboard.at_end
+        real_cap = main_tdashboard.compat.capture_pane
+        real_host = termstate.is_terminal_host
+        real_launch = termstate.launcher_exited
+        seen = {"n": 0}
+
+        def fake_at(pane, **kw):
+            seen["n"] += 1
+            return seen["n"] > 1
+
+        main_tdashboard.at_end = fake_at
+        main_tdashboard.compat.capture_pane = (
+            lambda pane, start=None, end=None: screen)
+        termstate.is_terminal_host = lambda t: False
+        termstate.launcher_exited = lambda t, **kw: None
+        self.addCleanup(setattr, main_tdashboard, "at_end", real_at)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
+        self.addCleanup(setattr, termstate, "is_terminal_host", real_host)
+        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
+
+        class Pane:
+            pane_id = "%0"
+
+        out = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01)
+        self.assertNotIn("[%]", out, "prompt chrome must never be returned")
+
     def test_returns_the_output_not_the_prompt(self):
         """The return value is the command's output, not the prompt.
 
@@ -983,8 +1012,12 @@ class WaitPaneIdle(unittest.TestCase):
                            "grace period expires")
 
     def test_returns_when_the_launcher_exited(self):
-        self.assertEqual(self._run_with([False], launcher="error: interrupted by the user"),
-                         "done")
+        # The launcher-death case is a *finish*, not output, and must be
+        # distinguishable from a command that printed the same text -- hence
+        # the documented prefix (found by the cross-repo audit).
+        out = self._run_with([False], launcher="error: interrupted by the user")
+        self.assertTrue(out.startswith(main_tdashboard.LAUNCHER_EXIT_PREFIX), out)
+        self.assertIn("error: interrupted by the user", out)
 
     def test_raises_when_the_budget_runs_out(self):
         with self.assertRaises(main_tdashboard.PaneBusy):
