@@ -18,6 +18,7 @@ server as the invoking user.
 import os
 import subprocess
 import sys
+import time as _time
 
 try:
     import libtmux
@@ -410,7 +411,6 @@ def window_state(session_name, window_name=None, retries=10):
     a missing window, so failing the whole run on it would make the dashboard
     flaky rather than correct.
     """
-    import time as _time
 
     last = ""
     for attempt in range(retries):
@@ -503,6 +503,49 @@ def pane_by_id(pane_id):
 def send_keys(pane, *keys):
     """Send keys to a pane (the only supported way to type into one)."""
     return pane.cmd("send-keys", *keys)
+
+
+class PaneBusy(Exception):
+    """The pane never reached a terminal state inside the caller's budget."""
+
+
+def wait_pane_idle(pane, timeout=3600.0, poll=0.25):
+    """Block until the pane's foreground job finishes; return the exit line.
+
+    Callers in this repository keep writing their own `while ... sleep` loops to
+    ask this, and they get it wrong in the same ways: they poll a marker that
+    can never arrive, they have no failure condition for a launcher that died,
+    and they report nothing until the loop ends. That is why an interrupted
+    `nixos-shell` looked like a 25-minute hang, and why a build that had already
+    finished was still being waited on.
+
+    Waits on the *process*, not on a string: `termstate` already answers whether
+    the pane's foreground program is blocked reading its terminal, which is true
+    exactly when a job has finished and the shell is back at a prompt. Returns
+    the last non-empty screen line so the caller can quote what it saw; raises
+    `PaneBusy` when the budget runs out.
+
+    A launcher that exited is a finish, not a hang: `termstate.launcher_exited`
+    says which, and the caller can distinguish the cases from the returned text.
+    """
+    # Imported here, not at module scope: termstate is the higher layer and
+    # importing it eagerly would make the dependency cycle real.
+    import termstate
+
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        state = termstate.pane_state(pane.pane_id)
+        if state.ready and not termstate.is_terminal_host(pane.pane_id):
+            tail = [ln for ln in capture_pane(pane, start="-12") if ln.strip()]
+            return tail[-1].rstrip() if tail else ""
+        if termstate.launcher_exited(pane.pane_id):
+            tail = [ln for ln in capture_pane(pane, start="-12") if ln.strip()]
+            return tail[-1].rstrip() if tail else ""
+        _time.sleep(poll)
+    raise PaneBusy(
+        f"pane {pane.pane_id} was still busy after {timeout:.0f}s: "
+        f"{termstate.describe(pane.pane_id)}"
+    )
 
 
 def capture_pane(pane, start=None, end=None):

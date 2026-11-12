@@ -646,6 +646,61 @@ class PaneStreamReassembly(unittest.TestCase):
         self.assertIn("produced no output", str(ctx.exception))
 
 
+class WaitPaneIdle(unittest.TestCase):
+    """One primitive for "block until the pane's job finishes".
+
+    Callers kept writing their own `while ... sleep` loops, and they failed the
+    same ways each time: polling a marker that can never arrive, no failure
+    condition for a launcher that died, and no output until the loop ended. That
+    is why an interrupted run looked like a 25-minute hang and a finished build
+    was still being waited on.
+    """
+
+    def _run_with(self, states, launcher=None):
+        """Drive wait_pane_idle through `states`, then a terminal one."""
+        seq = list(states)
+
+        class FakeState:
+            ready = False
+
+        def fake_state(target, **kw):
+            st = FakeState()
+            st.ready = seq.pop(0) if seq else True
+            return st
+
+        real_state = termstate.pane_state
+        real_term = termstate.is_terminal_host
+        real_launch = termstate.launcher_exited
+        real_capture = main_tdashboard.compat.capture_pane
+        termstate.pane_state = fake_state
+        termstate.is_terminal_host = lambda t: False
+        termstate.launcher_exited = lambda t, **kw: launcher
+        real_describe = termstate.describe
+        termstate.describe = lambda t, **kw: "stub: still busy"
+        main_tdashboard.compat.capture_pane = lambda pane, start=None, end=None: ["done"]
+        self.addCleanup(setattr, termstate, "pane_state", real_state)
+        self.addCleanup(setattr, termstate, "is_terminal_host", real_term)
+        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
+        self.addCleanup(setattr, termstate, "describe", real_describe)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_capture)
+
+        class Pane:
+            pane_id = "%0"
+
+        return main_tdashboard.compat.wait_pane_idle(Pane(), timeout=2, poll=0.01)
+
+    def test_returns_when_the_job_finishes(self):
+        self.assertEqual(self._run_with([False, False]), "done")
+
+    def test_returns_when_the_launcher_exited(self):
+        self.assertEqual(self._run_with([False], launcher="error: interrupted by the user"),
+                         "done")
+
+    def test_raises_when_the_budget_runs_out(self):
+        with self.assertRaises(main_tdashboard.compat.PaneBusy):
+            self._run_with([False] * 1000)
+
+
 class LauncherExited(unittest.TestCase):
     """A foreground launcher that died must not read as "ready".
 
