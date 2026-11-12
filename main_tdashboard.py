@@ -693,6 +693,19 @@ def get_attached_pane(server, session_name="main"):
     return compat.active_pane(compat.require_session(server, session_name))
 
 
+def _as_pane(pane):
+    """Return a live libtmux Pane for a pane object or a `%N` id string.
+
+    Callers often only have the id: a session file's libtmux handles go stale
+    once `renew_session` recreates the session, so the id is the durable handle.
+    Both `at_end` and `wait_pane_idle` document accepting either; resolving here
+    keeps that promise (a str has no `capture_pane`, which is what crashed).
+    """
+    if hasattr(pane, "pane_id"):
+        return pane
+    return compat.pane_by_id(str(pane))
+
+
 def at_end(pane, time_out=1, debugging=False,
            send_enter_to_check_if_interpreter=True,
            require_shell=False,
@@ -739,7 +752,12 @@ def at_end(pane, time_out=1, debugging=False,
     the tty), so `expect_host` stays opt-in here rather than being forced on
     every pane of a remote target.
     """
-    target = pane.pane_id if hasattr(pane, "pane_id") else str(pane)
+    # Accept a pane object OR a pane id string (`%N`). Everything below needs a
+    # real pane: `_stable_prompt`/`capture_pane` call `pane.capture_pane()`, which
+    # a str does not have -- that AttributeError is what the "pane or id" docstring
+    # promised but did not deliver. Resolve once, here.
+    pane = _as_pane(pane)
+    target = pane.pane_id
 
     # For a pane that hosts another terminal the process state cannot answer
     # anything, so ask the redraw question first and hand the answer to
@@ -944,7 +962,8 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
     A launcher that exited is a finish, not a hang: `termstate.launcher_exited`
     says which, and the caller can tell the cases apart from the returned text.
     """
-    target = pane.pane_id if hasattr(pane, "pane_id") else str(pane)
+    pane = _as_pane(pane)
+    target = pane.pane_id
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         # A terminal host can only be judged by its screen, so the probe is
@@ -1043,6 +1062,16 @@ def checked_cmd(pane,
 
 
 def interactive_dashboard(session_functions, debugging):
+    # `-i` is a real REPL: it reads a menu choice from stdin. Piping a command
+    # list into it used to crash with an EOFError from `input()`; refuse with a
+    # clear message instead, and point at the non-interactive path.
+    if not sys.stdin.isatty():
+        print(
+            "dashboard: --interactive needs a TTY (it reads menu choices from "
+            "stdin). Drop -i to spawn every spawn_* and exit.",
+            file=sys.stderr,
+        )
+        return 2
     while 1:
         global all_files
         all_files = get_dir_session_files(args.scripts)
@@ -1112,28 +1141,37 @@ def s_all(respawn_all=True):
         name = f"{session_function.split('_')[-1]}"
         func = f"{session_function}()"
         if respawn_all:
-            name_pane = compat.active_pane(renew_session(
-                name,
-                keep_session=True
-            ))
-
+            # `spawn_<name>()` creates the session itself (it calls
+            # renew_session). Do NOT pre-create here: renew_session(...)
+            # with keep_session=True returns None on a fresh target, so the
+            # old `compat.active_pane(renew_session(name, keep_session=True))`
+            # crashed before the session file had a chance to spawn.
             print(f'Starting {func}')
             exec(func) in globals(), locals()
+            session = compat.get_session(server, name)
+            if session is None:
+                print(f"dashboard: {func} did not create session {name!r}",
+                      file=sys.stderr)
+                continue
+            name_pane = compat.active_pane(session)
         else:
-            print(f"Trying to get active_pane of {name}")
-            try:
+            # Probe with get_session (quiet) rather than require_session, which
+            # raises CompatError -- the old `except AttributeError` never caught
+            # it, so a fresh target printed `dashboard: no tmux session named
+            # '<x>'` and aborted before the spawn branch could run.
+            if compat.get_session(server, name) is not None:
+                print(f"Trying to get active_pane of {name}")
                 name_pane = compat.active_pane(
                     compat.require_session(server, name))
                 pane_name_as_var = f'global {name}_pane; {name}_pane = name_pane'
                 exec(pane_name_as_var) in globals(), locals()
                 continue
-            except AttributeError:
-                print(f'Starting {func} because its not spawned yet')
-                exec(func) in globals(), locals()
-                name_pane = compat.active_pane(renew_session(
-                    name,
-                    keep_session=True
-                ))
+            print(f'Starting {func} because its not spawned yet')
+            exec(func) in globals(), locals()
+            name_pane = compat.active_pane(renew_session(
+                name,
+                keep_session=True
+            ))
         exec(f'{name}_pane = name_pane') in globals(), locals()
 
 
@@ -1277,20 +1315,42 @@ def main():
     # One name per spawn_* function, so a session file may spawn several
     # windows without a second spawn_* being invented for them.
     if args.interactive:
-        interactive_dashboard(
+        rc = interactive_dashboard(
             session_functions,
             debugging=True
         )
+        if rc:
+            return rc
     else:
-        s_all(respawn_all=False)
+        # Non-interactive mode is the documented unattended path (no REPL): it
+        # must SPAWN every `spawn_*` in the session file, not attach to one. The
+        # old `s_all(respawn_all=False)` took the attach branch, so on a fresh
+        # target it printed `no tmux session named '<x>'`, created nothing, and
+        # still exited 0 -- a silently empty success (BUG-noninteractive-...).
+        s_all(respawn_all=True)
 
+    missing = []
     for session_function in session_functions:
         name = f"{session_function.split('_')[-1]}"
         named_pane = name + "_pane"
         session = compat.get_session(server, name)
         if session is None:
+            # A pane whose shell exits (e.g. a non-interactive command that
+            # returns) lets tmux reap the session. Report it instead of
+            # silently continuing with exit 0.
+            missing.append(name)
             continue
         globals()[named_pane] = compat.active_pane(session)
+
+    if missing:
+        print(
+            "dashboard: session(s) not present after spawn: "
+            + ", ".join(repr(n) for n in missing)
+            + ". A pane's shell likely exited; panes must keep an interactive "
+            "shell alive (or set remain-on-exit) for the session to survive.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Leftover REPL for convenience: `python3 -i main_tdashboard.py ...`
     # exposes the pane_<name> variables bound above. Use plain `-i`, not

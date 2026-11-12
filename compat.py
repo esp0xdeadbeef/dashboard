@@ -505,6 +505,32 @@ def send_keys(pane, *keys):
     return pane.cmd("send-keys", *keys)
 
 
+# `wait_pane_idle` / `PaneBusy` live in main_tdashboard, next to the `at_end`
+# they are built on -- that is where the readiness decision and its tests are.
+# They are re-exported here because callers outside this tree (e.g. the HAT's
+# `hat-isp.py`) probe `compat.wait_pane_idle` to decide whether to use the
+# primitive or fall back to their own polling loop. The import is deferred: this
+# module must not import main_tdashboard at scope, because main_tdashboard
+# imports *this* module first.
+def wait_pane_idle(pane, *args, **kwargs):
+    """Delegate to `main_tdashboard.wait_pane_idle`.
+
+    See that function for the semantics; this wrapper exists only so the
+    primitive keeps its historical `compat` home for external callers.
+    """
+    import main_tdashboard as _d
+    return _d.wait_pane_idle(pane, *args, **kwargs)
+
+
+def __getattr__(name):
+    # `compat.PaneBusy` must be the very class main_tdashboard raises, so an
+    # `except compat.PaneBusy` in a caller catches the raised exception.
+    if name == "PaneBusy":
+        import main_tdashboard as _d
+        return _d.PaneBusy
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def capture_pane(pane, start=None, end=None):
     """Capture pane contents as a list of lines."""
     if start is not None:

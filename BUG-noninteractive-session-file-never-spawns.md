@@ -4,7 +4,7 @@
 told to use) cannot create a session at all.
 **File:** `main_tdashboard.py` (`s_all`, and the non-interactive branch of
 `main`)
-**Status:** OPEN
+**Status:** FIXED
 
 ## Symptom
 
@@ -153,3 +153,13 @@ is how a run requested for `ci-watch` ended up spawning `cases` instead.
 
 Linux, `tmux 3.7b` on the remote target, `venv/bin/python` 3.13, dashboard
 checkout at `~/github/dashboard`.
+
+## Resolution (FIXED)
+
+`main()`'s non-interactive branch now calls `s_all(respawn_all=True)` (spawn,
+not attach). `s_all` no longer pre-creates with `renew_session(keep_session=True)`
+(which returned None on a fresh target and crashed before the session file could
+spawn) — it runs `spawn_<name>()` and reads the session back. A session missing
+after spawn is reported and exits non-zero. Covered by
+`test_detection.NonInteractiveSpawns`. The isatty guard for `-i` (B3 of the
+related report) is also in.

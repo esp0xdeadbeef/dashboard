@@ -746,6 +746,108 @@ class PaneStreamReassembly(unittest.TestCase):
         self.assertIn("produced no output", str(ctx.exception))
 
 
+class NonInteractiveSpawns(unittest.TestCase):
+    """Non-interactive mode must create sessions, not attach to them.
+
+    `main()`'s non-interactive branch used `s_all(respawn_all=False)`, the
+    attach path, so a fresh target printed `no tmux session named '<x>'`,
+    created nothing, and exited 0 (BUG-noninteractive-... and B1 of
+    BUG-6003660b-...). `s_all(respawn_all=True)` also crashed because it called
+    `renew_session(name, keep_session=True)` -- which returns None on a fresh
+    target -- before the session file's `spawn_*` could create it.
+    """
+
+    def _run_s_all(self, respawn, spawn_side_effect):
+        # Minimal stand-ins for the tmux server and session.
+        class Session:
+            def __init__(self, name):
+                self.session_name = name
+
+        class ActivePane:
+            pane_id = "%0"
+
+        sessions = {}
+
+        def get_session(server, name):
+            return sessions.get(name)
+
+        def renew_session(name, keep_session=False, start_directory="~"):
+            if keep_session:
+                return sessions.get(name)
+            sessions[name] = Session(name)
+            return sessions[name]
+
+        def active_pane(session):
+            return ActivePane()
+
+        def exec_spawn(name):
+            spawn_side_effect(sessions, name)
+
+        saved = {}
+        for attr in ("session_functions", "server"):
+            saved[attr] = getattr(main_tdashboard, attr, None)
+        saved["get_session"] = main_tdashboard.compat.get_session
+        saved["renew_session"] = main_tdashboard.renew_session
+        saved["active_pane"] = main_tdashboard.compat.active_pane
+
+        main_tdashboard.session_functions = ["spawn_demo"]
+        main_tdashboard.server = object()
+        main_tdashboard.compat.get_session = get_session
+        main_tdashboard.renew_session = renew_session
+        main_tdashboard.compat.active_pane = active_pane
+
+        # The spawn_* function is exec'd by name from globals; provide one.
+        main_tdashboard.spawn_demo = lambda: exec_spawn("demo")
+        try:
+            main_tdashboard.s_all(respawn_all=respawn)
+        finally:
+            for attr in ("session_functions", "server"):
+                setattr(main_tdashboard, attr, saved[attr])
+            main_tdashboard.compat.get_session = saved["get_session"]
+            main_tdashboard.renew_session = saved["renew_session"]
+            main_tdashboard.compat.active_pane = saved["active_pane"]
+            if hasattr(main_tdashboard, "spawn_demo"):
+                delattr(main_tdashboard, "spawn_demo")
+        return sessions
+
+    def test_respawn_all_spawns_on_a_fresh_target(self):
+        # The spawn function creates the session, as a real session file does.
+        sessions = self._run_s_all(
+            True, lambda sessions, name: sessions.__setitem__(
+                name, type("S", (), {"session_name": name})()))
+        self.assertIn("demo", sessions,
+                      "respawn_all=True must let spawn_* create the session")
+
+
+class PaneArgAcceptance(unittest.TestCase):
+    """`at_end` / `wait_pane_idle` must accept a pane id string, not just an object.
+
+    Both documented "a pane object or a pane id string" but then passed the
+    string into `capture_pane`, which needs `pane.capture_pane()` -- so the
+    documented form crashed with `AttributeError: 'str' object has no
+    attribute 'capture_pane'` (BUG-wait-pane-idle-pane-id-crash). The id is the
+    only durable handle a caller has once a session is re-created.
+    """
+
+    def test_as_pane_resolves_a_string_id(self):
+        # A non-existent id must fail cleanly (CompatError from pane_by_id),
+        # not with the AttributeError the bug reported.
+        with self.assertRaises(main_tdashboard.compat.CompatError):
+            main_tdashboard._as_pane("%42")
+
+    def test_as_pane_passes_an_object_through(self):
+        class Pane:
+            pane_id = "%7"
+        p = Pane()
+        self.assertIs(main_tdashboard._as_pane(p), p)
+
+    def test_at_end_does_not_crash_on_a_string(self):
+        # No live pane %99999: it must reach the clean "no such pane" error
+        # from pane_by_id, never the AttributeError the bug reported.
+        with self.assertRaises(main_tdashboard.compat.CompatError):
+            main_tdashboard.at_end("%99999", probe=True)
+
+
 class WaitPaneIdle(unittest.TestCase):
     """One primitive for "block until the pane's job finishes".
 
@@ -842,6 +944,38 @@ class WaitPaneIdle(unittest.TestCase):
         self.assertEqual(out, "root@guest:~#")
         self.assertTrue(all(p is True for p in seen),
                         "a terminal host must always be probed")
+
+
+class CompatReExportsPrimitive(unittest.TestCase):
+    """`compat.wait_pane_idle` / `compat.PaneBusy` must stay importable.
+
+    The primitive's implementation lives in main_tdashboard (next to `at_end`),
+    but callers outside this tree -- the HAT's `hat-isp.py` -- probe
+    `hasattr(compat, "wait_pane_idle")` and fall back to their own polling loop
+    when it is missing. A refactor that moved the function out of `compat`
+    silently sent the HAT down that fallback; this test pins the external
+    contract so a move cannot do that again.
+    """
+
+    def test_wait_pane_idle_is_reexported(self):
+        self.assertTrue(hasattr(main_tdashboard.compat, "wait_pane_idle"))
+
+    def test_pane_busy_is_the_same_class(self):
+        self.assertIs(main_tdashboard.compat.PaneBusy, main_tdashboard.PaneBusy,
+                      "an `except compat.PaneBusy` must catch what the impl raises")
+
+    def test_reexport_forwards_to_the_implementation(self):
+        class Pane:
+            pane_id = "%0"
+        real = main_tdashboard.at_end
+        main_tdashboard.at_end = lambda pane, **kw: True
+        real_cap = main_tdashboard.compat.capture_pane
+        main_tdashboard.compat.capture_pane = (
+            lambda pane, start=None, end=None: ["$ "])
+        self.addCleanup(setattr, main_tdashboard, "at_end", real)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
+        self.assertEqual(main_tdashboard.compat.wait_pane_idle(Pane(), timeout=1,
+                                                               poll=0.01), "$")
 
 
 class StreamScriptGrouping(unittest.TestCase):
