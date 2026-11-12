@@ -6,6 +6,7 @@ WIP.
 - [Description](#description)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Running a session file unattended (no REPL)](#running-a-session-file-unattended-no-repl)
 - [Reading long output (serial consoles)](#reading-long-output-serial-consoles)
 
 ## Description
@@ -73,6 +74,40 @@ ipython3 $dashboard_path/main_tdashboard.py -i -- $scripts_path --session-file $
 spawn-tmux-session
 # whenever you want to spawn the tmux-dashbaord.
 ```
+
+### Running a session file unattended (no REPL)
+
+For CI, an agent, or a one-shot deploy you do **not** want the `-i` REPL.
+Drop `-i`: the dashboard spawns every `spawn_*` in the session file and
+returns. `scripts` is a **positional** argument, so put it after the flags:
+
+```bash
+tmux-dashboard --target 100.64.0.18:sudo scripts \
+    --session-file ./scripts/smoke.py
+echo "exit=$?"
+```
+
+Things the interactive examples above do not make obvious:
+
+* **`-i` needs a real TTY.** Piping into it (`printf 'a\n' | tmux-dashboard -i
+  …`) crashes with `EOFError: EOF when reading a line` — use the
+  non-interactive form above instead.
+* **The session name is the `spawn_` suffix.** `spawn_smoke()` spawns a
+  session named `smoke`; the runner looks that exact name up afterwards. A
+  file whose function is `spawn_test` but which calls `renew_session("smoke")`
+  will not be found. Keep the two names identical.
+* **`dashboard: no tmux session named '<x>'` is normal on a first run.** It is
+  printed before the spawn happens; it is not an error. (See
+  `BUG-6003660b-…` — it should be silent.)
+* **A pane must keep an interactive shell alive.** If a pane's shell exits
+  (e.g. it ran a plain non-interactive command and returned), tmux reaps the
+  session; check for it with `tmux list-sessions` (or the target's
+  `sudo tmux list-sessions`) rather than trusting the exit code. Set
+  `remain-on-exit`, or keep the pane at a shell prompt, if you need to read its
+  output afterwards.
+* **The runner does not surface a long command's exit status.** Record it in
+  the pane yourself and read it back, e.g. finish the command with
+  `echo EXIT=${PIPESTATUS[0]}`, then `pane_capture()`/`pane_stream()` the pane.
 
 ## Targets: driving tmux somewhere else
 
