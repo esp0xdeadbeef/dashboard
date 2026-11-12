@@ -66,3 +66,17 @@ indistinguishable, from inside the new pane, from one that never started.
 
     pkill -f 'qemu-system.*isp-cobalt.qcow2'
     hat-isp.py start cobalt
+
+## Resolution (FIXED in the dashboard; process-level parts belong to the HAT)
+
+Items 1/4 that the dashboard can answer are fixed in `termstate.launcher_exited`:
+before honouring a scrollback marker it now checks the pane's own process chain,
+and a live terminal host (qemu-system, screen, …) there means the run is alive —
+so a replaced pane carrying an OLD `error: interrupted by the user` no longer
+reports "launcher exited" for a healthy guest. Covered by
+`LauncherExited::test_a_live_terminal_host_in_the_chain_is_not_reported`.
+
+Items 2/3 (per-site image lock as the lock; `stop` reaping by process) need
+`start`/`stop` in the HAT (`network-site-esp/scripts/hat-isp.py`): a VM orphaned
+by a killed session is invisible from any pane by construction, so the pane-based
+detector cannot reap it.
