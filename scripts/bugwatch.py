@@ -36,24 +36,34 @@ E = 16
 is_bug = lambda n: n.lower().startswith("bug") and n.endswith(".md")
 
 
+def _sha(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def sizes():
     out = {}
     for n in os.listdir(DIRECTORY):
         if is_bug(n):
+            path = os.path.join(DIRECTORY, n)
             try:
-                out[n] = os.path.getsize(os.path.join(DIRECTORY, n))
+                out[n] = (os.path.getsize(path), _sha(path))
             except OSError:
                 pass
     return out
 
 
-known = sizes()               # name -> size already reported
+known = sizes()               # name -> (size, sha) already reported
 pending = {}                  # name -> deadline (monotonic) to flush
 dead = set()                  # names seen deleted
 
 print(f"watching {DIRECTORY} for BUG*.md (inotify, no sleep, no tmux)", flush=True)
 for n in sorted(known):
-    print(f"  present: {n} ({known[n]} bytes)", flush=True)
+    print(f"  present: {n} ({known[n][0]} bytes)", flush=True)
 
 while True:
     timeout = None
@@ -84,6 +94,7 @@ while True:
         path = os.path.join(DIRECTORY, name)
         try:
             sz = os.path.getsize(path)
+            sha = _sha(path)
         except OSError:
             if name in known:
                 print(f"\n=== DELETE: {name} ===", flush=True)
@@ -99,11 +110,32 @@ while True:
             if sz:
                 with open(path, errors="replace") as f:
                     print(f.read(), flush=True)
-        elif sz > old:
-            print(f"\n=== APPEND: {name} (+{sz - old} bytes) ===", flush=True)
-            with open(path, errors="replace") as f:
-                f.seek(old)
-                print(f.read(), flush=True)
-        elif sz < old:
-            print(f"\n=== TRUNCATED: {name} (now {sz} bytes) ===", flush=True)
-        known[name] = sz
+        else:
+            old_sz, old_sha = old
+            if sha == old_sha:
+                known[name] = (sz, sha)
+                continue
+            appended = False
+            if sz > old_sz:
+                # APPEND only if the old prefix is byte-identical; a truncating
+                # rewrite can also grow the file (e.g. 5-byte "test\n" -> 6-byte
+                # "test2\n"), which is NOT an append and must not be read from
+                # the old offset.
+                try:
+                    with open(path, "rb") as f:
+                        prefix = f.read(old_sz)
+                    import hashlib
+                    appended = hashlib.sha256(prefix).hexdigest() == old_sha
+                except OSError:
+                    appended = False
+            if appended:
+                print(f"\n=== APPEND: {name} (+{sz - old_sz} bytes) ===", flush=True)
+                with open(path, errors="replace") as f:
+                    f.seek(old_sz)
+                    print(f.read(), flush=True)
+            else:
+                print(f"\n=== REWRITE: {name} (now {sz} bytes) ===", flush=True)
+                if sz:
+                    with open(path, errors="replace") as f:
+                        print(f.read(), flush=True)
+        known[name] = (sz, sha)
