@@ -39,9 +39,13 @@ def spawn_ciwait():
 
 
 def _watch_command():
+    # `gh run list | xargs -r gh run watch` reports success when `gh run list`
+    # fails: the pipe produces no input, `xargs` exits 0, and the caller reads a
+    # green "ci exit=0" from a run that was never watched. `set -o pipefail`
+    # makes the failing stage fail the watch instead.
     if RUN_ID:
         watch = f"gh run watch {RUN_ID} --exit-status"
     else:
         watch = ("gh run list --limit 1 --json databaseId "
                  "--jq '.[0].databaseId' | xargs -r gh run watch --exit-status")
-    return f"cd {REPO} && {watch}; printf '\\n=== ci exit=%s\\n' \"$?\""
+    return f"set -o pipefail; cd {REPO} && {watch}; printf '\\n=== ci exit=%s\\n' \"$?\""
