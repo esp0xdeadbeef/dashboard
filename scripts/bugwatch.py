@@ -72,19 +72,33 @@ while True:
     r, _, _ = select.select([fd], [], [], timeout)
 
     if r:
-        data = os.read(fd, 8192)
-        i = 0
-        while i < len(data):
-            _wd, mask, _cookie, ln = struct.unpack_from("iIII", data, i)
-            name = data[i + E:i + E + ln].split(b"\0", 1)[0].decode(errors="replace")
-            i += E + ln
-            if not name or not is_bug(name):
-                continue
-            if mask & IN_DELETE:
-                dead.add(name)
-                pending[name] = time.monotonic()   # flush immediately
-            else:
-                pending[name] = time.monotonic() + QUIET
+        # Drain the WHOLE inotify queue before flushing. One save emits several
+        # raw events (CREATE/MODIFY*n/CLOSE_WRITE); reading only one per loop
+        # iteration flushed the same change again on the next iteration, which
+        # is why one edit printed three identical APPENDs.
+        while True:
+            try:
+                data = os.read(fd, 65536)
+            except BlockingIOError:
+                break
+            except OSError:
+                break
+            if not data:
+                break
+            i = 0
+            while i < len(data):
+                _wd, mask, _cookie, ln = struct.unpack_from("iIII", data, i)
+                name = data[i + E:i + E + ln].split(b"\0", 1)[0].decode(errors="replace")
+                i += E + ln
+                if not name or not is_bug(name):
+                    continue
+                if mask & IN_DELETE:
+                    dead.add(name)
+                    pending.setdefault(name, time.monotonic())  # flush immediately
+                else:
+                    # Do not extend a pending deadline: keep the earliest, so a
+                    # burst of events for one save flushes once.
+                    pending.setdefault(name, time.monotonic() + QUIET)
 
     now = time.monotonic()
     for name, due in list(pending.items()):
