@@ -76,7 +76,8 @@
             chmod -R u+w .
             ${py}/bin/python3 -m compileall -q main_tdashboard.py compat.py \
               remote.py termstate.py prompts.py
-            ${py}/bin/python3 -m unittest test_detection test_remote
+            ${py}/bin/python3 -m unittest test_detection test_remote \
+              test_noninteractive
             # `scripts/*.sh` are NOT shell scripts: they are payloads typed
             # line-by-line into a pane by send_keys_to_pane (a shebang there
             # would be typed as a command, and $(tty) must expand in the
