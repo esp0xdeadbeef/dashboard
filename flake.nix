@@ -77,7 +77,14 @@
             ${py}/bin/python3 -m compileall -q main_tdashboard.py compat.py \
               remote.py termstate.py prompts.py
             ${py}/bin/python3 -m unittest test_detection test_remote
-            shellcheck scripts/*.sh || true
+            # `scripts/*.sh` are NOT shell scripts: they are payloads typed
+            # line-by-line into a pane by send_keys_to_pane (a shebang there
+            # would be typed as a command, and $(tty) must expand in the
+            # pane's own shell). shellcheck assumes a standalone script and
+            # reports SC2148/SC2046 on them, so only lint real shell files --
+            # ones that begin with a shebang.
+            sh_files=$(grep -l '^#!' scripts/*.sh 2>/dev/null || true)
+            if [ -n "$sh_files" ]; then shellcheck $sh_files; fi
             touch $out
           '';
           default = dashboard;

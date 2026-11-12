@@ -581,6 +581,28 @@ def _is_terminal_host(comm: str | None) -> bool:
     return any(name.startswith(h) for h in TERMINAL_HOSTS)
 
 
+# Programs that take over the tty to page through text: `git log`, `man`, a
+# `--help` that is longer than the screen. They *are* blocked reading the tty,
+# so process state alone reports READY -- but a shell command typed into one is
+# not run: `less` treats it as a search or a motion, and the caller's command
+# silently disappears into the pager. That is the same "looks ready, is not a
+# shell" hazard as a REPL or a password prompt, so a pager is reported as an
+# *unsafe* prompt rather than as readiness.
+#
+# Matched on the process that owns the tty, so it works regardless of what the
+# screen happens to show: `git log` fresh in `less` sits at the top of the log
+# with no `--More--` or `:` yet, which the screen table's `pager` entry misses.
+PAGERS = ("less", "more", "most", "pg", "moar", "pager")
+
+
+def _is_pager(comm: str | None) -> bool:
+    if not comm:
+        return False
+    name = comm.lstrip(".")
+    return any(name == p or name.startswith(p + "-") or name.startswith(p + ".")
+               for p in PAGERS)
+
+
 # Output a launcher leaves behind when it is interrupted before it starts the
 # thing it was going to start. `nixos-shell` prints the first; the rest are the
 # generic "the command never ran" forms.
@@ -706,6 +728,29 @@ def pane_state(target: str, rescan: bool = True, expect_host: str | None = None,
     chain = tuple(process_chain(shell_pid)) if rescan else (shell_pid,)
     owner = _pane_tty_owner(shell_pid) or chain[-1] if chain else shell_pid
     base = classify(owner)
+
+    # A pager sitting on the tty is blocked reading it, so `classify` says
+    # READY -- but it is not a shell. Report it as an unsafe prompt (kind
+    # "menu") so `at_end`/`wait_pane_idle` refuse to type a command line into
+    # it, and so `describe` says *why*. This is process-based, so it fires even
+    # when the screen shows the top of a page with no `--More--` yet.
+    if _is_pager(base.comm):
+        match = None
+        try:
+            import prompts as _prompts
+            tail = ""
+            if rescan:
+                tail = _prompts.last_line(
+                    _prompts.strip_console_noise(capture(target)))
+            match = _prompts.PromptMatch("pager", "menu", tail, 0, owner)
+        except Exception:
+            # prompts.txt missing/invalid must not break detection.
+            match = None
+        return PaneState(
+            State.BUSY,
+            f"{base.comm} is a pager; not a shell (quit it before sending)",
+            base.pid, base.comm, match, chain,
+        )
 
     # Prompt match, tagged with the depth of the process that owns the tty so
     # a nested prompt is distinguishable from the outer one.

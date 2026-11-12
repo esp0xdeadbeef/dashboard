@@ -221,7 +221,14 @@ def _stream_script(inner_cmd):
         printf %s cm9vdCAxIGluaXQ= | md5sum              ->  fb86bd08
     """
     return (
-        f"{inner_cmd} | base64 -w 60 > /tmp/.dash_stream; "
+        # Braced, so the pipe applies to the WHOLE command. Interpolated bare,
+        # `printf L1; echo; printf L2` became `printf L1; echo; printf L2 |
+        # base64 ...` and only the last statement was captured -- every earlier
+        # one printed to the terminal and vanished. Measured 2026-11-12:
+        # `printf "L1\nL2\n"` worked, `printf L1; echo; printf L2; echo`
+        # reported "the command produced no output", and so did a legitimate
+        # `echo A; echo B`.
+        f"{{ {inner_cmd}; }} | base64 -w 60 > /tmp/.dash_stream; "
         "n=$(wc -l < /tmp/.dash_stream); i=0; "
         "while read -r l; do i=$((i+1)); "
         'echo "$i:$n:$l:$(printf %s "$l" | base64 -w0 | md5sum | cut -c1-8)"; '
@@ -907,6 +914,57 @@ def _stable_prompt(pane, debugging=False):
     if debugging:
         print(f"{{at_end/probe}} did not settle (was {before!r})")
     return False
+
+
+class PaneBusy(Exception):
+    """The pane never reached a terminal state inside the caller's budget."""
+
+
+def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
+                   expect_host=None):
+    """Block until the pane's foreground job finishes; return the exit line.
+
+    Callers kept writing their own `while ... sleep` loops, and they failed the
+    same ways each time: polling a marker that can never arrive, no failure
+    condition for a launcher that died, and nothing reported until the loop
+    ended. That is why an interrupted `nixos-shell` looked like a 25-minute
+    hang and a finished build was still being waited on.
+
+    This waits on the *process*, not on a string, and it is deliberately built
+    on `at_end` rather than on a bare `termstate.pane_state` call: `at_end` is
+    the one place that knows a pane hosting another terminal (QEMU's console,
+    `screen`, `minicom`) is *always* blocked on its tty, so process state alone
+    would call a booting guest "idle" -- the exact failure the redraw probe
+    exists to prevent. For a terminal host the probe is required, so it is
+    always requested here.
+
+    Returns the last non-empty screen line so the caller can quote what it saw;
+    raises `PaneBusy` when the budget runs out.
+
+    A launcher that exited is a finish, not a hang: `termstate.launcher_exited`
+    says which, and the caller can tell the cases apart from the returned text.
+    """
+    target = pane.pane_id if hasattr(pane, "pane_id") else str(pane)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        # A terminal host can only be judged by its screen, so the probe is
+        # mandatory there; elsewhere process state is the whole answer and the
+        # probe would needlessly type an empty Enter into an ordinary shell.
+        probe = termstate.is_terminal_host(target)
+        if at_end(pane, probe=probe, expect_host=expect_host,
+                  debugging=debugging):
+            tail = [ln for ln in compat.capture_pane(pane, start="-12")
+                    if ln.strip()]
+            return tail[-1].rstrip() if tail else ""
+        if termstate.launcher_exited(target):
+            tail = [ln for ln in compat.capture_pane(pane, start="-12")
+                    if ln.strip()]
+            return tail[-1].rstrip() if tail else ""
+        time.sleep(poll)
+    raise PaneBusy(
+        f"pane {target} was still busy after {timeout:.0f}s: "
+        f"{termstate.describe(target)}"
+    )
 
 
 def checked_cmd(pane,

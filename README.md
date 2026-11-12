@@ -141,6 +141,14 @@ extra channel:
   identically, the last line *is* the prompt, and it is recorded (generalised
   over time/host/index) for the rest of the run. New prompt styles therefore
   need no code change.
+* **A pager is not a shell.** `git log`, `man`, a long `--help` leave `less`
+  (or `more`/`most`) blocked on the tty, which process state reads as "wants
+  input" -- but a shell command typed there is a *search* or a *motion*, so it
+  never runs. That is caught on the process name (`termstate.PAGERS`), not on
+  the screen: `git log` fresh in `less` shows the top of the page with no
+  `--More--`/`:` yet, so the screen table would miss it. The pane is reported
+  as an unsafe "pager" prompt, so `at_end`/`wait_pane_idle` refuse to type
+  into it. Quit the pager first.
 
 Requirements: `ssh host true` must work without a prompt (BatchMode), and
 `sudo -n` must succeed for `:sudo` targets. If sudo cannot work

@@ -369,6 +369,106 @@ class TerminalHost(unittest.TestCase):
         self.assertFalse(ok)
 
 
+class PagerIsNotAShell(unittest.TestCase):
+    """A pager (`less`/`more`/`most`) owning the tty is a prompt, not a shell.
+
+    `git log`, `man`, a long `--help` all leave a pager blocked reading the tty
+    -- which process state correctly reads as "wants input", but a shell
+    command typed there is treated by `less` as a search or a motion and never
+    runs. Worse, the screen shows the top of the page with no `--More--` yet,
+    so the screen table's `pager` entry does not match either. The pane therefore
+    looked READY and the caller's command vanished into the pager.
+
+    Detection is on the owner's process name, so it does not depend on what the
+    page happens to be showing.
+    """
+
+    def _fake_procs(self, pager_comm):
+        # shell 100 (bash) + foreground pager 200 in its own process group.
+        table = {
+            100: dict(pid=100, comm="bash", state="S", ppid=1, tpgid=200,
+                      utime=0, stime=0),
+            200: dict(pid=200, comm=pager_comm, state="S", ppid=100, tpgid=200,
+                      utime=0, stime=0),
+        }
+        kids = {100: [200], 200: []}
+
+        class FakeProc(termstate.ProcSource):
+            def stat(self, pid):
+                return table.get(pid)
+
+            def wchan(self, pid):
+                # Both bash and the pager are blocked reading the tty -- which
+                # is exactly why process state alone cannot tell them apart.
+                return "n_tty_read" if pid in table else ""
+
+            def children(self, pid):
+                return list(kids.get(pid, []))
+
+        return FakeProc()
+
+    def _pane_state(self, pager_comm, screen):
+        class StaticSource(termstate.TmuxSource):
+            def run(self, *args):
+                return 0, screen, ""
+
+        real_proc = termstate.proc_source()
+        real_tmux = termstate.tmux_source()
+        real_info = termstate.pane_info
+        termstate.set_proc_source(self._fake_procs(pager_comm))
+        termstate.set_tmux_source(StaticSource())
+        termstate.pane_info = lambda t: termstate.PaneInfo(
+            target=t, pid=100, tty="/dev/pts/0", command="bash",
+            width=80, height=24)
+        self.addCleanup(termstate.set_proc_source, real_proc)
+        self.addCleanup(termstate.set_tmux_source, real_tmux)
+        self.addCleanup(setattr, termstate, "pane_info", real_info)
+        return termstate.pane_state("%0")
+
+    def test_less_is_busy_not_ready(self):
+        st = self._pane_state("less", "commit 1a2b3c4\n    the first commit\n:")
+        self.assertIs(st.state, termstate.State.BUSY,
+                      "a pane inside `less` must not be READY")
+        self.assertIsNotNone(st.prompt)
+        self.assertEqual(st.prompt.tool, "pager")
+        self.assertFalse(st.safe_to_send,
+                         "a command line must not be sent into a pager")
+
+    def test_less_at_top_of_page_is_still_detected(self):
+        # No `--More--` or `:` on screen yet -- the screen table would miss it.
+        st = self._pane_state("less", "commit 1a2b3c4\n    the first commit")
+        self.assertIs(st.state, termstate.State.BUSY)
+        self.assertEqual(st.tool, "pager")
+
+    def test_more_and_most_are_pagers(self):
+        for comm in ("more", "most", "moar"):
+            st = self._pane_state(comm, "some text")
+            self.assertIs(st.state, termstate.State.BUSY, comm)
+
+    def test_at_end_refuses_a_pager(self):
+        class StaticSource(termstate.TmuxSource):
+            def run(self, *args):
+                return 0, "commit 1a2b3c4\n    the first commit", ""
+
+        real_proc = termstate.proc_source()
+        real_tmux = termstate.tmux_source()
+        real_info = termstate.pane_info
+        termstate.set_proc_source(self._fake_procs("less"))
+        termstate.set_tmux_source(StaticSource())
+        termstate.pane_info = lambda t: termstate.PaneInfo(
+            target=t, pid=100, tty="/dev/pts/0", command="bash",
+            width=80, height=24)
+        self.addCleanup(termstate.set_proc_source, real_proc)
+        self.addCleanup(termstate.set_tmux_source, real_tmux)
+        self.addCleanup(setattr, termstate, "pane_info", real_info)
+
+        class Pane:
+            pane_id = "%0"
+
+        self.assertFalse(main_tdashboard.at_end(Pane()),
+                         "at_end must not report a pager as idle")
+
+
 class LearnedPrompts(unittest.TestCase):
     """A prompt must not need to be written down to be recognised.
 
@@ -654,40 +754,46 @@ class WaitPaneIdle(unittest.TestCase):
     condition for a launcher that died, and no output until the loop ended. That
     is why an interrupted run looked like a 25-minute hang and a finished build
     was still being waited on.
+
+    `wait_pane_idle` is built on `at_end`, so the fakes below stand in for the
+    two things the loop actually consults: `at_end` (the readiness oracle, whose
+    own behaviour is covered by the `AtEnd`/`TerminalHost` tests) and
+    `termstate.launcher_exited`.
     """
 
-    def _run_with(self, states, launcher=None):
+    def _run_with(self, states, launcher=None, terminal_host=False):
         """Drive wait_pane_idle through `states`, then a terminal one."""
         seq = list(states)
 
-        class FakeState:
-            ready = False
+        def fake_at_end(pane, **kw):
+            return seq.pop(0) if seq else True
 
-        def fake_state(target, **kw):
-            st = FakeState()
-            st.ready = seq.pop(0) if seq else True
-            return st
-
-        real_state = termstate.pane_state
-        real_term = termstate.is_terminal_host
-        real_launch = termstate.launcher_exited
-        real_capture = main_tdashboard.compat.capture_pane
-        termstate.pane_state = fake_state
-        termstate.is_terminal_host = lambda t: False
+        saved = {
+            "at_end": main_tdashboard.at_end,
+            "is_terminal_host": termstate.is_terminal_host,
+            "launcher_exited": termstate.launcher_exited,
+            "capture_pane": main_tdashboard.compat.capture_pane,
+            "describe": termstate.describe,
+        }
+        main_tdashboard.at_end = fake_at_end
+        termstate.is_terminal_host = lambda t: terminal_host
         termstate.launcher_exited = lambda t, **kw: launcher
-        real_describe = termstate.describe
         termstate.describe = lambda t, **kw: "stub: still busy"
-        main_tdashboard.compat.capture_pane = lambda pane, start=None, end=None: ["done"]
-        self.addCleanup(setattr, termstate, "pane_state", real_state)
-        self.addCleanup(setattr, termstate, "is_terminal_host", real_term)
-        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
-        self.addCleanup(setattr, termstate, "describe", real_describe)
-        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_capture)
+        main_tdashboard.compat.capture_pane = (
+            lambda pane, start=None, end=None: ["", "done", ""])
+        self.addCleanup(setattr, main_tdashboard, "at_end", saved["at_end"])
+        self.addCleanup(setattr, termstate, "is_terminal_host",
+                        saved["is_terminal_host"])
+        self.addCleanup(setattr, termstate, "launcher_exited",
+                        saved["launcher_exited"])
+        self.addCleanup(setattr, termstate, "describe", saved["describe"])
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane",
+                        saved["capture_pane"])
 
         class Pane:
             pane_id = "%0"
 
-        return main_tdashboard.compat.wait_pane_idle(Pane(), timeout=2, poll=0.01)
+        return main_tdashboard.wait_pane_idle(Pane(), timeout=2, poll=0.01)
 
     def test_returns_when_the_job_finishes(self):
         self.assertEqual(self._run_with([False, False]), "done")
@@ -697,8 +803,63 @@ class WaitPaneIdle(unittest.TestCase):
                          "done")
 
     def test_raises_when_the_budget_runs_out(self):
-        with self.assertRaises(main_tdashboard.compat.PaneBusy):
-            self._run_with([False] * 1000)
+        with self.assertRaises(main_tdashboard.PaneBusy):
+            self._run_with([False] * 100000)
+
+    def test_terminal_host_is_judged_by_probe_not_process_state(self):
+        """A booting guest must not be reported idle just because QEMU blocks.
+
+        The old compat implementation returned as soon as
+        `state.ready and not is_terminal_host(...)`, which for a terminal host
+        was *always* false -- so a booting guest looked finished. Here the host
+        flag flips on the same `at_end(probe=True)` path the whole codebase
+        uses, so the loop keeps waiting until `at_end` says the screen settled.
+        """
+        seen = []
+        real = main_tdashboard.at_end
+
+        def fake_at_end(pane, **kw):
+            seen.append(kw.get("probe"))
+            return False if len(seen) < 3 else True
+
+        main_tdashboard.at_end = fake_at_end
+        real_host = termstate.is_terminal_host
+        termstate.is_terminal_host = lambda t: True
+        real_launch = termstate.launcher_exited
+        termstate.launcher_exited = lambda t, **kw: None
+        real_cap = main_tdashboard.compat.capture_pane
+        main_tdashboard.compat.capture_pane = (
+            lambda pane, start=None, end=None: ["root@guest:~# "])
+        self.addCleanup(setattr, main_tdashboard, "at_end", real)
+        self.addCleanup(setattr, termstate, "is_terminal_host", real_host)
+        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
+
+        class Pane:
+            pane_id = "%0"
+
+        out = main_tdashboard.wait_pane_idle(Pane(), timeout=2, poll=0.01)
+        self.assertEqual(out, "root@guest:~#")
+        self.assertTrue(all(p is True for p in seen),
+                        "a terminal host must always be probed")
+
+
+class StreamScriptGrouping(unittest.TestCase):
+    """The pipe must apply to the whole command, not its last statement.
+
+    `_stream_script` interpolated inner_cmd bare in front of `| base64 ...`, so
+    `printf L1; echo; printf L2` captured only the final `printf`. Everything
+    before it printed to the terminal and was lost, and the reader reported
+    "the command produced no output" -- which reads as a broken probe.
+    """
+
+    def test_semicolons_are_grouped_under_one_pipe(self):
+        script = main_tdashboard._stream_script("echo A; echo B")
+        self.assertIn("{ echo A; echo B; } | base64", script)
+
+    def test_a_single_command_is_still_grouped(self):
+        self.assertIn("{ true; } | base64",
+                      main_tdashboard._stream_script("true"))
 
 
 class LauncherExited(unittest.TestCase):
