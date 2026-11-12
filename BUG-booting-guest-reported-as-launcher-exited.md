@@ -74,3 +74,20 @@ window by the time a boot is underway.
 
 Nothing is wrong with the site, the model or the renderer. The guest in the failing run
 reached its prompt and passed the acceptance checks; only the verdict was wrong.
+
+## Resolution (FIXED)
+
+`launcher_exited` now asks the right question before honouring a scrollback
+marker: `_launcher_running()` looks for a launcher process (nixos-shell /
+nix-shell / nix-build / nixos-build-vms / vagrant) or a terminal host anywhere in
+the pane's process tree -- its ancestry **and its descendants**. Descendants are
+what the previous guard missed: during early boot QEMU is not yet an ancestor of
+anything the pane reports (chain is `[zsh]` / `[zsh > .nixos-shell-wr]`), so an
+ancestry-only test answered False and a stale marker condemned a guest that was
+mid-boot.
+
+Scope stays this pane's subtree, not the machine (tmux/screen/socat are terminal
+hosts and exist everywhere). A VM orphaned by a killed session remains invisible
+from the pane by construction -- reaping that is `start`/`stop`'s job.
+
+Covered by `LauncherExited::test_a_booting_guest_is_not_reported_exited`.

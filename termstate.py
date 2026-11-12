@@ -646,17 +646,60 @@ def launcher_exited(target: str, scroll: int = 60) -> str | None:
         last_launch = max(
             (text.rfind(line) for line in LAUNCH_LINES), default=-1)
         if last_marker > last_launch:
-            # A marker in scrollback is only proof the *pane's* job ended. A
-            # launcher whose pane was replaced (session killed and recreated)
-            # leaves its marker behind in the new shell's scrollback while its
-            # VM process is still alive -- measured 2026-11-12: `qemu-system
-            # ... isp-cobalt.qcow2` running with a live nixos-shell parent, yet
-            # `start` reported "launcher exited". If a terminal host is still
-            # running, the run is alive regardless of what this pane shows.
-            if _terminal_host_running(target):
+            # A marker in scrollback is only proof that *some* run ended. The
+            # pane is reused, so an old `error: interrupted by the user` can sit
+            # above a run that is very much alive -- and the "after the last
+            # launch line" test cannot help when that launch line has itself
+            # scrolled out of the window (it does, during a boot).
+            #
+            # The authoritative question is therefore "is a launcher still
+            # running for this pane's session", not "is there a marker". Any
+            # launcher process (nixos-shell / nix-shell / qemu) in the pane's
+            # process tree means the run is alive, whatever the scrollback says:
+            if _launcher_running(target):
                 return None
             return marker
     return None
+
+
+# A launcher that *starts* something: while one is alive the run it belongs to
+# has not finished, even if a previous run's exit marker is still in scrollback.
+LAUNCHER_COMMS = ("nixos-shell", "nix-shell", "nix-build", "nixos-build-vms",
+                  "nix", "vagrant")
+
+
+def _launcher_running(target: str) -> bool:
+    """True when a launcher (or the terminal host it started) is still alive.
+
+    Checked over the whole process tree the pane can see: the pane's own
+    ancestry *and its descendants*. Descendants matter because during early
+    boot the QEMU is not yet an ancestor of anything the pane reports -- the
+    chain is still `[zsh]` or `[zsh > .nixos-shell-wr]` -- so an ancestry-only
+    test answered False for a guest that was mid-boot, and a stale marker in
+    scrollback condemned a healthy run (measured 2026-11-12).
+
+    Scoped to this pane's shell subtree, not the machine: `tmux`/`screen`/
+    `socat` are terminal hosts and exist everywhere, so a machine-wide test
+    would answer "running" forever. A VM orphaned by a killed session is
+    invisible here by construction; reaping that is the caller's job.
+    """
+    try:
+        info = pane_info(target)
+        if info is None:
+            return False
+        tree = [info.pid, *process_chain(info.pid), *_descendants(info.pid)]
+        for pid in tree:
+            comm = _comm_of(pid)
+            if not comm:
+                continue
+            if _is_terminal_host(comm):
+                return True
+            name = comm.lstrip(".")
+            if any(name.startswith(c) for c in LAUNCHER_COMMS):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _terminal_host_running(target: str) -> bool:

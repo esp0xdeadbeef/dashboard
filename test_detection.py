@@ -1061,6 +1061,46 @@ class LauncherExited(unittest.TestCase):
             "error: killed by signal",
         )
 
+    def test_a_booting_guest_is_not_reported_exited(self):
+        """A launcher as a *descendant* means the run is alive (early boot).
+
+        During early boot the pane's chain is still `[zsh]` or
+        `[zsh > .nixos-shell-wr]`; QEMU is a descendant, not an ancestor. An
+        ancestry-only guard answered False and a stale marker in scrollback
+        condemned a guest that was mid-boot (measured 2026-11-12: the pane
+        showed `isp-cobalt login: root (automatic login)` and moments later the
+        guest was at its prompt and passing).
+        """
+        real = termstate.tmux_source
+
+        class StaticSource:
+            def run(self, *args):
+                return 0, "error: interrupted by the user\n[  OK  ] booting", ""
+
+        termstate.set_tmux_source(StaticSource())
+        self.addCleanup(termstate.set_tmux_source, real)
+        real_info = termstate.pane_info
+        real_chain = termstate.process_chain
+        real_desc = termstate._descendants
+        real_comm = termstate._comm_of
+        termstate.pane_info = lambda t: termstate.PaneInfo(
+            target=t, pid=100, tty="/dev/pts/0", command="bash",
+            width=80, height=24)
+        # chain is a bare shell; the launcher is a descendant (early boot)
+        termstate.process_chain = lambda pid: [100]
+        termstate._descendants = lambda pid: [200, 300]
+        comms = {100: "zsh", 200: ".nixos-shell-wr", 300: ".qemu-system-x8"}
+        termstate._comm_of = lambda pid: comms.get(pid, "?")
+        self.addCleanup(setattr, termstate, "pane_info", real_info)
+        self.addCleanup(setattr, termstate, "process_chain", real_chain)
+        self.addCleanup(setattr, termstate, "_descendants", real_desc)
+        self.addCleanup(setattr, termstate, "_comm_of", real_comm)
+
+        self.assertIsNone(
+            termstate.launcher_exited("%0"),
+            "a booting guest must not be reported as an exited launcher",
+        )
+
     def test_a_live_terminal_host_in_the_chain_is_not_reported(self):
         """A VM alive in the pane's chain must not read as an exited launcher.
 
