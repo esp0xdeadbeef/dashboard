@@ -939,7 +939,7 @@ class PaneBusy(Exception):
 
 
 def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
-                   expect_host=None):
+                   expect_host=None, grace=2.0):
     """Block until the pane's foreground job finishes; return the exit line.
 
     Callers kept writing their own `while ... sleep` loops, and they failed the
@@ -961,17 +961,31 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
 
     A launcher that exited is a finish, not a hang: `termstate.launcher_exited`
     says which, and the caller can tell the cases apart from the returned text.
+
+    A pane that is *already* idle when this is called has not necessarily
+    finished anything: immediately after the pane is created the shell is idle,
+    and returning on that first sample reports "finished" for a command that has
+    not started (measured 2026-11-12: the tail was the typed text still sitting
+    at the prompt, and the command only ran after an extra Enter). So an idle
+    sample is only accepted once the pane has been seen busy, unless
+    `grace` seconds pass with it never becoming busy -- which keeps commands
+    that finish instantly from wedging the caller.
     """
     pane = _as_pane(pane)
     target = pane.pane_id
     deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    seen_busy = False
     while time.monotonic() < deadline:
         # A terminal host can only be judged by its screen, so the probe is
         # mandatory there; elsewhere process state is the whole answer and the
         # probe would needlessly type an empty Enter into an ordinary shell.
         probe = termstate.is_terminal_host(target)
-        if at_end(pane, probe=probe, expect_host=expect_host,
-                  debugging=debugging):
+        ready = at_end(pane, probe=probe, expect_host=expect_host,
+                       debugging=debugging)
+        if not ready:
+            seen_busy = True
+        elif seen_busy or (time.monotonic() - start) >= grace:
             tail = [ln for ln in compat.capture_pane(pane, start="-12")
                     if ln.strip()]
             return tail[-1].rstrip() if tail else ""

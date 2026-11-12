@@ -900,6 +900,44 @@ class WaitPaneIdle(unittest.TestCase):
     def test_returns_when_the_job_finishes(self):
         self.assertEqual(self._run_with([False, False]), "done")
 
+    def test_does_not_return_before_the_command_starts(self):
+        """An idle pane at call time must not count as "finished".
+
+        Right after a pane is created the shell is idle, so a first-sample
+        "is it idle?" test answers yes and wait_pane_idle reported finished for
+        a command that had not started (measured 2026-11-12: the returned tail
+        was the typed text still sitting at the prompt, and it only ran after an
+        extra Enter). A busy sample must be seen first.
+        """
+        calls = {"n": 0}
+        real = main_tdashboard.at_end
+
+        def always_idle(pane, **kw):
+            calls["n"] += 1
+            return True
+
+        main_tdashboard.at_end = always_idle
+        real_cap = main_tdashboard.compat.capture_pane
+        main_tdashboard.compat.capture_pane = (
+            lambda pane, start=None, end=None: ["$ "])
+        real_host = termstate.is_terminal_host
+        termstate.is_terminal_host = lambda t: False
+        real_launch = termstate.launcher_exited
+        termstate.launcher_exited = lambda t, **kw: None
+        self.addCleanup(setattr, main_tdashboard, "at_end", real)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
+        self.addCleanup(setattr, termstate, "is_terminal_host", real_host)
+        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
+
+        class Pane:
+            pane_id = "%0"
+
+        main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01, grace=0.1)
+        # It waited for the grace period instead of returning on sample 1.
+        self.assertGreater(calls["n"], 1,
+                           "an already-idle pane must not return before the "
+                           "grace period expires")
+
     def test_returns_when_the_launcher_exited(self):
         self.assertEqual(self._run_with([False], launcher="error: interrupted by the user"),
                          "done")
@@ -974,8 +1012,10 @@ class CompatReExportsPrimitive(unittest.TestCase):
             lambda pane, start=None, end=None: ["$ "])
         self.addCleanup(setattr, main_tdashboard, "at_end", real)
         self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
-        self.assertEqual(main_tdashboard.compat.wait_pane_idle(Pane(), timeout=1,
-                                                               poll=0.01), "$")
+        # grace=0: this test stands in an already-idle pane and only checks that
+        # the compat wrapper forwards to the implementation.
+        self.assertEqual(main_tdashboard.compat.wait_pane_idle(
+            Pane(), timeout=1, poll=0.01, grace=0), "$")
 
 
 class StreamScriptGrouping(unittest.TestCase):
