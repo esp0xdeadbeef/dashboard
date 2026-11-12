@@ -101,6 +101,54 @@ afterwards. The `no tmux session named '<x>'` notice printed before a *spawn* is
 expected (see `BUG-6003660b-…`); printing it while also refusing to spawn is
 not.
 
+
+## Additional finding: the shipped CI-watch example no longer matches its name
+
+`scripts/ci_watch_session.py`'s docstring still describes watching a CI run:
+
+```
+"""Watch the newest CI run for a repository in a tmux window.
+Replaces `sleep N; gh run view` polling ...
+"""
+```
+
+but the file now defines only `spawn_cases()`, which runs the repository's
+`tests/<case>` list in a session named `cases`. There is no `spawn_` function
+for a CI watch at all, so running that file can never produce the documented
+`ci-watch` session — the runner derives the session name from the `spawn_`
+suffix. Either the name should be `spawn_ci_watch` and the body restored, or the
+docstring should describe the cases runner and the file should be renamed.
+
+A working session file for the documented behaviour, verified against
+`network-renderer-wireguard` run 43304294403, is:
+
+```python
+import os
+import compat
+
+def spawn_ciwatch():
+    session = renew_session("ciwatch")
+    window = compat.new_window_named(session, "w")
+    pane = compat.active_pane_of_window(window)
+    compat.send_keys(pane,
+        f"cd {os.environ['CI_WATCH_REPO']} && "
+        f"gh run watch {os.environ['CI_WATCH_ID']} --exit-status; echo EXIT=$?")
+    compat.send_keys(pane, "C-m")
+```
+
+driven with `-i` and `a` at the menu, which spawned `ciwatch` and streamed the
+run live.
+
+## Note on interactive mode
+
+`-i` does *not* auto-spawn either: it prints a menu
+(`0 = spawn_<name>` / `a = spawn all` / `exit/quit`) and waits on stdin. When
+`--session-file` points at a file whose `spawn_*` differs from the one in the
+`scripts` directory, the menu lists the **scripts-directory** function
+(`spawn_cases`), not the `--session-file` one, because both are exec'd into the
+same globals and the scripts directory is scanned as the source of names. That
+is how a run requested for `ci-watch` ended up spawning `cases` instead.
+
 ## Verified on
 
 Linux, `tmux 3.7b` on the remote target, `venv/bin/python` 3.13, dashboard
