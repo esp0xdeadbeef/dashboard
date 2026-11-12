@@ -690,6 +690,20 @@ class LauncherExited(unittest.TestCase):
             "root@isp-cobalt:~# ",
         ]))
 
+    def test_a_previous_runs_interrupt_is_not_reported(self):
+        """Scrollback from a dead run must not condemn the current one.
+
+        The pane is reused: an interrupted run leaves its message there, and the
+        next `start` types a new launch line below it. A plain substring search
+        reported the old interruption against the fresh build.
+        """
+        self.assertIsNone(self._with_screen([
+            "$ nixos-shell ./cobalt.nix",
+            "error: interrupted by the user",
+            "$ nixos-shell ./cobalt.nix",
+            "[17/21 built, 3 copied (13.7 MiB)]",
+        ]))
+
     def test_killed_by_signal_is_reported(self):
         self.assertEqual(
             self._with_screen(["$ nixos-shell ./x.nix",

@@ -584,6 +584,10 @@ def _is_terminal_host(comm: str | None) -> bool:
 # Output a launcher leaves behind when it is interrupted before it starts the
 # thing it was going to start. `nixos-shell` prints the first; the rest are the
 # generic "the command never ran" forms.
+# The line a caller types to start the launcher. An exit marker older than the
+# most recent one of these belongs to a previous run.
+LAUNCH_LINES = ("nixos-shell ", "nix-shell ", "vagrant up", "qemu-system")
+
 LAUNCHER_EXIT_MARKERS = (
     "error: interrupted by the user",
     "error: killed by signal",
@@ -609,7 +613,17 @@ def launcher_exited(target: str, scroll: int = 60) -> str | None:
     """
     text = capture(target, scroll=scroll)
     for marker in LAUNCHER_EXIT_MARKERS:
-        if marker in text:
+        if marker not in text:
+            continue
+        # Only a marker that comes AFTER the last launch line counts. A dead run
+        # leaves its message in scrollback, and a later `start` reuses the same
+        # pane, so a plain substring search reported the previous run's
+        # interruption against the new one -- measured 2026-11-12 with `state`
+        # while a fresh build was running.
+        last_marker = text.rfind(marker)
+        last_launch = max(
+            (text.rfind(line) for line in LAUNCH_LINES), default=-1)
+        if last_marker > last_launch:
             return marker
     return None
 
