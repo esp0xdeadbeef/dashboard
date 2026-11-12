@@ -1106,6 +1106,14 @@ def checked_cmd(pane,
         if debugging:
             print('{checked_cmd} sleeping at_end = False')
         time.sleep(time_out)
+    # Discard any half-typed line first. A `spawn_*` that seeds the pane with a
+    # command returns after a fixed send delay, without confirming the shell
+    # consumed the trailing Enter; typing now concatenates onto it
+    # (`truecd /repo && ...` -> `command not found: truecd`) while the end
+    # marker still prints, so the caller gets exit=127 and no explanation
+    # (BUG-checked-cmd-concatenates-onto-the-previous-command, measured
+    # 2026-11-12). C-u clears whatever is on the line; it is harmless when empty.
+    compat.send_keys(pane, "C-u")
     compat.send_keys(pane, row_to_send)
     compat.send_keys(pane, "C-m")
 
