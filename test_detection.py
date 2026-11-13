@@ -1163,6 +1163,18 @@ class CompatReExportsPrimitive(unittest.TestCase):
     def test_wait_pane_idle_is_reexported(self):
         self.assertTrue(hasattr(main_tdashboard.compat, "wait_pane_idle"))
 
+    def test_launcher_exit_prefix_is_reexported(self):
+        """Callers must be able to test the prefix without importing the module.
+
+        A caller written before the prefix existed treated every return value as
+        output, so a clean launcher finish looked like a crash (measured
+        2026-11-13: the HAT reported "the launcher exited first" for a VM that
+        was building). The constant has to live somewhere importable.
+        """
+        self.assertTrue(hasattr(main_tdashboard.compat, "LAUNCHER_EXIT_PREFIX"))
+        self.assertIs(main_tdashboard.compat.LAUNCHER_EXIT_PREFIX,
+                      main_tdashboard.LAUNCHER_EXIT_PREFIX)
+
     def test_pane_busy_is_the_same_class(self):
         self.assertIs(main_tdashboard.compat.PaneBusy, main_tdashboard.PaneBusy,
                       "an `except compat.PaneBusy` must catch what the impl raises")

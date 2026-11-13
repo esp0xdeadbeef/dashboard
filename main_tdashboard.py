@@ -1099,7 +1099,17 @@ def wait_pane_idle(pane, timeout=3600.0, poll=0.25, debugging=False,
 
     If the launcher itself died (an interrupted `nixos-shell`), the value is
     `LAUNCHER_EXIT_PREFIX + <the launcher's exit line>`, so it cannot be confused
-    with a command that printed that text.
+    with a command that printed that text. **Callers MUST test for it** --
+    `value.startswith(compat.LAUNCHER_EXIT_PREFIX)` -- because a caller written
+    before that prefix existed treated every returned string as output, and a
+    clean finish then looked exactly like a crash (measured 2026-11-13 by the
+    HAT, which reported "the launcher exited first" for a VM that was building).
+
+    A "launcher exited" verdict is not reachable while a launcher or terminal
+    host is still in the pane's process tree (see `termstate.launcher_exited`),
+    so a long boot cannot be reported as an exit by construction; a VM orphaned
+    by a killed session is invisible from any pane, and reaping it belongs to the
+    caller.
 
     One ambiguity remains by construction: a command that prints *nothing*
     leaves only its echoed line, which is indistinguishable from one line of

@@ -528,6 +528,12 @@ def __getattr__(name):
     if name == "PaneBusy":
         import main_tdashboard as _d
         return _d.PaneBusy
+    # `compat.LAUNCHER_EXIT_PREFIX` lets a caller tell a launcher death from a
+    # command that printed the same words, without importing main_tdashboard
+    # (an out-of-tree caller such as the HAT's hat-isp.py should not have to).
+    if name == "LAUNCHER_EXIT_PREFIX":
+        import main_tdashboard as _d
+        return _d.LAUNCHER_EXIT_PREFIX
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
