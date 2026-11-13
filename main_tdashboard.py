@@ -438,6 +438,49 @@ send_keys_to_pane(pane, get_file_content(all_files["test"]))
             if debugging:
                 print("Checked.")
 
+    # The last row may still be queued: confirm the shell read its Enter before
+    # returning, so a caller that immediately waits on the pane is not racing an
+    # unsubmitted line.
+    if send_enter_last_row and last_row_send:
+        _confirm_submitted(pane, last_row_send)
+
+
+def _confirm_submitted(pane, typed, timeout=2.0, poll=0.05):
+    """Wait until the shell has consumed the Enter that submitted `typed`.
+
+    `send_keys_to_pane` returns after a fixed delay, with no confirmation that
+    the shell read the trailing Enter. A caller that then waits on the pane sees
+    an idle shell whose command is still queued, unsubmitted -- and a
+    `wait_pane_idle` that requires a busy sample will wait forever on a line that
+    never runs (measured 2026-11-12: the pane showed the command sitting at the
+    prompt until an out-of-band Enter started it).
+
+    Submission is visible: the echoed line is the last line while the command is
+    queued, and once the shell reads it the line is followed by output, or the
+    prompt moves below it. Bounded, so a command that prints nothing and returns
+    instantly does not stall the caller.
+    """
+    if not typed:
+        return
+    needle = typed.strip()
+    if not needle:
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        lines = [ln.rstrip() for ln in compat.capture_pane(pane)]
+        while lines and not lines[-1].strip():
+            lines.pop()
+        if not lines:
+            return
+        last = lines[-1].strip()
+        # Still queued: the typed text is the last thing on screen, with the
+        # prompt immediately before it and nothing after.
+        if needle in last:
+            time.sleep(poll)
+            continue
+        return
+    return
+
 
 # Characters that mark a line as terminal echo rather than program output. A
 # prompt followed by the typed command contains both the prompt and the text,
