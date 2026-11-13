@@ -992,15 +992,17 @@ def _pane_output(pane):
 
     The pane shows the command being run as a prompt line carrying it
     (`\u2514\u2500[%] echo hi`), then the output, then the prompt again. The output
-    is what lies between the *last* such echo and the end of the screen, with
-    prompt chrome removed. Anchoring on the echo is what makes a silent command
-    return "" instead of the previous command's output: `true` has an echo line
-    and nothing after it (measured 2026-11-12: it returned `'SECOND_OUTPUT'`,
-    the previous command's result).
+    is what lies between the *last* such echo and the end of the screen, minus
+    the trailing prompt.
 
-    A baseline diff cannot do this job: the baseline has to be captured when the
-    wait starts, which is already after the command was typed, so its own echo is
-    inside the baseline.
+    The distinction that matters is prompt *shape*, not a leading glyph. An
+    earlier version dropped every line starting with a box-drawing character,
+    which silently discarded the output of `tree`, `ls --tree`, `nft list
+    ruleset` and every `\u2502`-separated table -- a command whose whole output was
+    box-drawn returned '' and the caller was told it printed nothing (measured
+    2026-11-12). A line is prompt chrome only when the prompt table matches it
+    (or it is a bare fragment of the wrapped powerline line, which is digits and
+    a closing bracket).
     """
     lines = [ln.rstrip() for ln in compat.capture_pane(pane, start="-40")]
     try:
@@ -1008,32 +1010,52 @@ def _pane_output(pane):
     except Exception:
         _prompts = None
 
-    def is_chrome(text):
-        if not text:
-            return True
-        if text[0] in "\u2500\u250c\u2514\u2502\u251c\u250f\u2570\u256d\u2571\u2572\u2550":
-            return True
-        if text.endswith("]") and len(text) <= 24 and any(c.isdigit() for c in text):
-            return True
-        return False
+    def matches_prompt(text):
+        if _prompts is None:
+            return False
+        stripped = _prompts.strip_console_noise(text)
+        return _prompts.match_line(stripped) is not None
+
+    def is_wrapped_prompt_fragment(text):
+        # "3 00:22]" -- the tail of a wrapped powerline prompt. Digits plus a
+        # closing bracket, and short. Nothing a command prints looks like this.
+        return bool(text) and text.endswith("]") and len(text) <= 24 \
+            and any(c.isdigit() for c in text) \
+            and not any(c.isalpha() for c in text)
+
+    # A prompt line that carries a command: the box-drawn powerline prompt that
+    # shells like this one draw (`└─[user@host] - [dir] - [branch] - [time]`)
+    # followed by the typed text. Matched on the *sigil pattern*, not on a
+    # leading box character, because tree/table output begins with the same
+    # glyphs and must never be discarded (measured 2026-11-12: `printf 'a\n├──
+    # b\n└── c\n'` returned only 'a').
+    _PROMPT_SIGILS = ("\u2514\u2500[", "\u250c\u2500[")
 
     def is_echo(text):
-        # "<prompt chrome> <typed command>" -- the prompt line that carries the
-        # command. It is the only line that both contains prompt chrome and has
-        # more text after it.
-        if not is_chrome(text) and "\u2514\u2500" not in text and "\u250c\u2500" not in text:
-            return False
-        if _prompts is not None:
-            m = _prompts.match_line(text)
-            if m is not None and text.strip() != m.line.strip():
-                return True
-        # `└─[%] echo hi`: chrome then a command
-        for sigil in ("[%] ", "[#] ", "$ ", "# ", "% "):
-            if sigil in text and text.strip().endswith(tuple("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'\"/.-_= ")) and len(text.split(sigil)[-1].strip()) > 0:
-                return True
-        return False
+        """`\u2514\u2500[%] <typed command>` -- the prompt line carrying the command.
 
-    # Last echoed command line; its output follows.
+        Only the bottom prompt (`\u2514\u2500[`) can carry a command; the top
+        header line starts with `\u250c\u2500[` and never does. Everything after the
+        last `]` is the typed text, which is what distinguishes an echo from the
+        bare prompt `\u2514\u2500[%]`.
+        """
+        if not text.startswith("\u2514\u2500["):
+            return False
+        close = text.rfind("]")
+        if close < 0:
+            return False
+        return bool(text[close + 1:].strip())
+
+    def is_prompt_line(text):
+        if is_echo(text):
+            return False
+        if text.startswith("\u2514\u2500[") or text.startswith("\u250c\u2500["):
+            return True
+        if matches_prompt(text):
+            return True
+        return is_wrapped_prompt_fragment(text)
+
+    # Anchor: the last echoed command line.
     start_idx = 0
     for i in range(len(lines) - 1, -1, -1):
         if is_echo(lines[i]):
@@ -1045,13 +1067,10 @@ def _pane_output(pane):
         text = ln.strip()
         if not text:
             continue
-        if is_chrome(text) or is_echo(text):
+        if is_prompt_line(text):
             continue
-        if _prompts is not None:
-            stripped = _prompts.strip_console_noise(text)
-            if _prompts.match_line(stripped) is not None:
-                continue
         body.append(ln)
+
     return "\n".join(body).strip()
 
 

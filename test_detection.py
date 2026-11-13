@@ -929,6 +929,45 @@ class WaitPaneIdle(unittest.TestCase):
         out = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01)
         self.assertNotIn("[%]", out, "prompt chrome must never be returned")
 
+    def test_box_drawn_output_is_not_mistaken_for_prompt(self):
+        """`tree`/`nft`/table output must survive the prompt filter.
+
+        An earlier filter dropped every line beginning with a box-drawing
+        character, so `printf 'a\n\u251c\u2500\u2500 b\n\u2514\u2500\u2500 c\n'` returned
+        only 'a' and a fully box-drawn listing returned '' -- the caller was
+        told a command printed nothing (measured 2026-11-12).
+        """
+        cases = [
+            ["\u2514\u2500[%] printf 'a\\n\u251c\u2500\u2500 b\\n\u2514\u2500\u2500 c\\n'",
+             "a", "\u251c\u2500\u2500 b", "\u2514\u2500\u2500 c", "\u2514\u2500[%]"],
+            ["\u2514\u2500[%] printf '\u251c\u2500\u2500 b\\n\u2514\u2500\u2500 c\\n'",
+             "\u251c\u2500\u2500 b", "\u2514\u2500\u2500 c", "\u2514\u2500[%]"],
+            ["\u2514\u2500[%] printf '\u2502 c1 \u2502 c2 \u2502\\n'",
+             "\u2502 c1 \u2502 c2 \u2502", "\u2514\u2500[%]"],
+        ]
+        expect = ["a\n\u251c\u2500\u2500 b\n\u2514\u2500\u2500 c", "\u251c\u2500\u2500 b\n\u2514\u2500\u2500 c",
+                  "\u2502 c1 \u2502 c2 \u2502"]
+        real_at = main_tdashboard.at_end
+        real_cap = main_tdashboard.compat.capture_pane
+        real_host = termstate.is_terminal_host
+        real_launch = termstate.launcher_exited
+        main_tdashboard.at_end = lambda pane, **kw: True
+        termstate.is_terminal_host = lambda t: False
+        termstate.launcher_exited = lambda t, **kw: None
+        self.addCleanup(setattr, main_tdashboard, "at_end", real_at)
+        self.addCleanup(setattr, main_tdashboard.compat, "capture_pane", real_cap)
+        self.addCleanup(setattr, termstate, "is_terminal_host", real_host)
+        self.addCleanup(setattr, termstate, "launcher_exited", real_launch)
+
+        class Pane:
+            pane_id = "%0"
+
+        for screen, want in zip(cases, expect):
+            main_tdashboard.compat.capture_pane = (
+                lambda pane, start=None, end=None, _s=screen: _s)
+            out = main_tdashboard.wait_pane_idle(Pane(), timeout=5, poll=0.01, grace=0)
+            self.assertEqual(out, want)
+
     def test_two_sequential_commands_do_not_bleed(self):
         """A silent command after a chatty one returns '', not the old output.
 
