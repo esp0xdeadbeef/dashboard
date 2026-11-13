@@ -1149,6 +1149,48 @@ class WaitPaneIdle(unittest.TestCase):
                         "a terminal host must always be probed")
 
 
+class SendKeysChunking(unittest.TestCase):
+    """A long line must be typed in bounded chunks, not all at once.
+
+    `tmux send-keys` writes the whole string into the pty in one go; past a few
+    hundred bytes the shell's echo loop races the write and two writers interleave
+    into the same row (measured 2026-11-13: a ~300-byte pane_stream command
+    arrived with its base64 stage overwritten by the end marker, which repeated
+    seven times, and the command's stdout died with BrokenPipeError). The
+    corruption is silent -- the end marker still arrives.
+    """
+
+    def _fake_pane(self, sent):
+        class Pane:
+            def cmd(self, *args):
+                sent.append(args)
+                return None
+        return Pane()
+
+    def test_long_text_is_chunked(self):
+        sent = []
+        pane = self._fake_pane(sent)
+        main_tdashboard.compat.send_keys(pane, "A" * 300)
+        chunks = [a[1] for a in sent]
+        self.assertGreater(len(chunks), 1, "a long line must be sent in chunks")
+        self.assertEqual("".join(chunks), "A" * 300,
+                         "chunking must not lose or reorder characters")
+        self.assertTrue(all(len(c) <= 200 for c in chunks))
+
+    def test_special_keys_are_not_chunked(self):
+        sent = []
+        pane = self._fake_pane(sent)
+        main_tdashboard.compat.send_keys(pane, "C-m")
+        main_tdashboard.compat.send_keys(pane, "Escape")
+        self.assertEqual([a[1] for a in sent], ["C-m", "Escape"])
+
+    def test_short_text_is_one_call(self):
+        sent = []
+        pane = self._fake_pane(sent)
+        main_tdashboard.compat.send_keys(pane, "ls")
+        self.assertEqual([a[1] for a in sent], ["ls"])
+
+
 class CompatReExportsPrimitive(unittest.TestCase):
     """`compat.wait_pane_idle` / `compat.PaneBusy` must stay importable.
 

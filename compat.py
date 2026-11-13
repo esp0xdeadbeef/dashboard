@@ -500,9 +500,34 @@ def pane_by_id(pane_id):
     return pane
 
 
+# tmux writes a send-keys string into the pty in one go, and the reader --
+# a shell's readline/zle echoing and redrawing every character -- cannot keep up
+# past a few hundred bytes. Two writers then interleave into the same row: a
+# ~300-byte `pane_stream` command arrived with `base64 -w 60 > /tmp/.dash_stream;`
+# overwritten by the end-marker text and the marker repeated seven times, while
+# the command's own stdout died with BrokenPipeError (measured 2026-11-13). The
+# same payload sent in shorter pieces ran cleanly.
+_SEND_CHUNK = 120          # characters per send-keys call
+_SEND_SETTLE = 0.02        # seconds between chunks
+
+
 def send_keys(pane, *keys):
-    """Send keys to a pane (the only supported way to type into one)."""
-    return pane.cmd("send-keys", *keys)
+    """Send keys to a pane (the only supported way to type into one).
+
+    Long strings are typed in bounded chunks with a short settle between them.
+    Handing tmux a few hundred characters at once races the shell's echo loop and
+    corrupts the line silently -- the caller waits for an end marker that *does*
+    arrive, then reads a shell error. Keys that are not plain text (``C-m``,
+    ``Escape`` and friends) are passed through untouched and never chunked.
+    """
+    for key in keys:
+        if not isinstance(key, str) or len(key) <= _SEND_CHUNK:
+            pane.cmd("send-keys", key)
+            continue
+        for start in range(0, len(key), _SEND_CHUNK):
+            pane.cmd("send-keys", key[start:start + _SEND_CHUNK])
+            if start + _SEND_CHUNK < len(key):
+                _time.sleep(_SEND_SETTLE)
 
 
 # `wait_pane_idle` / `PaneBusy` live in main_tdashboard, next to the `at_end`
