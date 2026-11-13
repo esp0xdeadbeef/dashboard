@@ -2,7 +2,7 @@
 # Keep bugwatch running, and keep a heartbeat that proves it is alive.
 #
 # Start it detached so it outlives the shell that launched it:
-#   setsid nohup script/bugwatch-supervisor.sh <dir> >/dev/null 2>&1 </dev/null &
+#   setsid nohup scripts/bugwatch-supervisor.sh <dir> >/dev/null 2>&1 </dev/null &
 #
 # bugwatch exits on the first event (so a caller can act on it); this supervisor
 # restarts it, which is what makes it a standing watcher rather than a one-shot.
