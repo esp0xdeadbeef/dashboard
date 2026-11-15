@@ -1171,7 +1171,7 @@ class SendKeysChunking(unittest.TestCase):
         sent = []
         pane = self._fake_pane(sent)
         main_tdashboard.compat.send_keys(pane, "A" * 300)
-        chunks = [a[1] for a in sent]
+        chunks = [a[-1] for a in sent]
         self.assertGreater(len(chunks), 1, "a long line must be sent in chunks")
         self.assertEqual("".join(chunks), "A" * 300,
                          "chunking must not lose or reorder characters")
@@ -1182,13 +1182,14 @@ class SendKeysChunking(unittest.TestCase):
         pane = self._fake_pane(sent)
         main_tdashboard.compat.send_keys(pane, "C-m")
         main_tdashboard.compat.send_keys(pane, "Escape")
-        self.assertEqual([a[1] for a in sent], ["C-m", "Escape"])
+        # Key names are not text and must not be behind `--`.
+        self.assertEqual(sent, [("send-keys", "C-m"), ("send-keys", "Escape")])
 
     def test_short_text_is_one_call(self):
         sent = []
         pane = self._fake_pane(sent)
         main_tdashboard.compat.send_keys(pane, "ls")
-        self.assertEqual([a[1] for a in sent], ["ls"])
+        self.assertEqual(sent, [("send-keys", "--", "ls")])
 
     def test_a_chunk_never_ends_with_a_semicolon(self):
         """tmux drops a `;` that ends a send-keys argument.
@@ -1204,11 +1205,30 @@ class SendKeysChunking(unittest.TestCase):
         pane = self._fake_pane(sent)
         text = "A" * 119 + ";" + "B" * 100
         main_tdashboard.compat.send_keys(pane, text)
-        chunks = [a[1] for a in sent]
+        chunks = [a[-1] for a in sent]
         self.assertTrue(all(not c.endswith(";") for c in chunks),
                         f"a chunk ended with ';': {chunks!r}")
         self.assertEqual("".join(chunks), text,
                          "extending the chunk must not change the text")
+
+    def test_a_chunk_starting_with_a_dash_is_literal(self):
+        """`send-keys` reads a leading `-n` as an option and drops the chunk.
+
+        Measured 2026-11-15 on the cobalt HAT: a 120-character chunk began with
+        `-n 'dport 53'`; tmux rejected the call as an unknown option, the chunk
+        vanished, and the guest ran the command with a 120-character hole.
+        `--` ends option parsing for the text argument.
+        """
+        sent = []
+        pane = self._fake_pane(sent)
+        # Boundary at 120 with a chunk that starts with `-n`.
+        text = "A" * 118 + " " + "-n 'dport 53' | head -20"
+        main_tdashboard.compat.send_keys(pane, text)
+        text_calls = [a for a in sent if a[0] == "send-keys"]
+        self.assertTrue(text_calls)
+        self.assertTrue(all(a[1] == "--" for a in text_calls),
+                        f"a text chunk was not protected from option parsing: {sent!r}")
+        self.assertEqual("".join(a[-1] for a in text_calls), text)
 
     def test_a_trailing_semicolon_is_sent_as_a_byte(self):
         """A text that really ends with `;` needs the hex spelling.
@@ -1220,7 +1240,7 @@ class SendKeysChunking(unittest.TestCase):
         sent = []
         pane = self._fake_pane(sent)
         main_tdashboard.compat.send_keys(pane, "echo a;")
-        self.assertEqual(sent, [("send-keys", "echo a"),
+        self.assertEqual(sent, [("send-keys", "--", "echo a"),
                                 ("send-keys", "-H", "3b")])
 
 

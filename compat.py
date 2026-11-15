@@ -16,6 +16,7 @@ server as the invoking user.
 """
 
 import os
+import re
 import subprocess
 import sys
 import time as _time
@@ -519,17 +520,34 @@ _SEND_SETTLE = 0.02        # seconds between chunks
 _SEMICOLON = ("-H", "3b")
 
 
+# tmux's own key-name spellings. Only these are passed as key names; anything
+# else is literal text (behind `--`), so a chunk beginning with `-n` or `-l`
+# cannot be read as an option and a string like `C-m` is not typed out.
+_KEY_NAME = re.compile(
+    r"^(?:[CMS]-[A-Za-z0-9\\\[\]^@_~]"
+    r"|Escape|Enter|Tab|BSpace|Space|Up|Down|Left|Right|Home|End"
+    r"|PageUp|PageDown|F(?:[1-9]|1[0-2]))$"
+)
+
+
 def _send_argument(pane, text):
     """Type `text` as one send-keys argument, never ending it with `;`."""
-    if not text.endswith(";"):
+    if _KEY_NAME.match(text):
         pane.cmd("send-keys", text)
+        return
+    if not text.endswith(";"):
+        # `--` ends option parsing: a chunk that happens to start with `-n`
+        # (e.g. `grep -n 'dport 53'`) was read as a send-keys option, tmux
+        # rejected the call, and the whole chunk vanished -- the guest ran a
+        # command with a 120-character hole in it.
+        pane.cmd("send-keys", "--", text)
         return
     # A trailing `;` (or run of them) cannot be delivered as an argument. Send
     # the rest as text and each `;` as its byte, so the pty receives exactly
     # what the caller asked for.
     body = text.rstrip(";")
     if body:
-        pane.cmd("send-keys", body)
+        pane.cmd("send-keys", "--", body)
     for _ in range(len(text) - len(body)):
         pane.cmd("send-keys", *_SEMICOLON)
 
