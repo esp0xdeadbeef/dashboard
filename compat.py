@@ -510,6 +510,29 @@ def pane_by_id(pane_id):
 _SEND_CHUNK = 120          # characters per send-keys call
 _SEND_SETTLE = 0.02        # seconds between chunks
 
+# tmux's command parser reads a `;` at the END of an argument as the separator
+# between two tmux commands and drops it: `send-keys 'a;'` types `a`, and
+# `send-keys ';'` types nothing. `-l` does not avoid this -- it only disables
+# key-name lookup, while the separator is consumed earlier, by the parser.
+# `send-keys -H 3b` writes the byte itself, the one spelling the parser cannot
+# reinterpret. Measured 2026-11-15 on tmux 3.x.
+_SEMICOLON = ("-H", "3b")
+
+
+def _send_argument(pane, text):
+    """Type `text` as one send-keys argument, never ending it with `;`."""
+    if not text.endswith(";"):
+        pane.cmd("send-keys", text)
+        return
+    # A trailing `;` (or run of them) cannot be delivered as an argument. Send
+    # the rest as text and each `;` as its byte, so the pty receives exactly
+    # what the caller asked for.
+    body = text.rstrip(";")
+    if body:
+        pane.cmd("send-keys", body)
+    for _ in range(len(text) - len(body)):
+        pane.cmd("send-keys", *_SEMICOLON)
+
 
 def send_keys(pane, *keys):
     """Send keys to a pane (the only supported way to type into one).
@@ -519,14 +542,28 @@ def send_keys(pane, *keys):
     corrupts the line silently -- the caller waits for an end marker that *does*
     arrive, then reads a shell error. Keys that are not plain text (``C-m``,
     ``Escape`` and friends) are passed through untouched and never chunked.
+
+    A chunk boundary must not land on a `;`: tmux drops a trailing `;` as a
+    command separator, so a long command with a `;` at that column arrived one
+    character short, the shell rejected the line as a syntax error, and the
+    end marker never printed -- every read then waited out its timeout
+    (measured 2026-11-15: `pane_stream`'s own `while read -r l; do` reached
+    the guest as `while read -r l do`, and the HAT's cobalt `client` probe hung
+    on the check). The chunk is extended instead, which keeps the text
+    byte-for-byte identical at the pty.
     """
     for key in keys:
         if not isinstance(key, str) or len(key) <= _SEND_CHUNK:
-            pane.cmd("send-keys", key)
+            _send_argument(pane, key)
             continue
-        for start in range(0, len(key), _SEND_CHUNK):
-            pane.cmd("send-keys", key[start:start + _SEND_CHUNK])
-            if start + _SEND_CHUNK < len(key):
+        start = 0
+        while start < len(key):
+            end = min(start + _SEND_CHUNK, len(key))
+            while end < len(key) and key[end - 1] == ";":
+                end += 1
+            _send_argument(pane, key[start:end])
+            start = end
+            if start < len(key):
                 _time.sleep(_SEND_SETTLE)
 
 

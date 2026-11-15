@@ -1190,6 +1190,39 @@ class SendKeysChunking(unittest.TestCase):
         main_tdashboard.compat.send_keys(pane, "ls")
         self.assertEqual([a[1] for a in sent], ["ls"])
 
+    def test_a_chunk_never_ends_with_a_semicolon(self):
+        """tmux drops a `;` that ends a send-keys argument.
+
+        The parser reads it as the separator between two tmux commands, so the
+        shell receives the line one character short. Measured 2026-11-15: the
+        HAT's cobalt `client` check sent `... while read -r l; do ...` and the
+        `;` at column 120 vanished, the guest answered `zsh: parse error near
+        'done'`, the end marker never printed, and every read waited out its
+        timeout -- the dashboard looked hung. The chunk is extended instead.
+        """
+        sent = []
+        pane = self._fake_pane(sent)
+        text = "A" * 119 + ";" + "B" * 100
+        main_tdashboard.compat.send_keys(pane, text)
+        chunks = [a[1] for a in sent]
+        self.assertTrue(all(not c.endswith(";") for c in chunks),
+                        f"a chunk ended with ';': {chunks!r}")
+        self.assertEqual("".join(chunks), text,
+                         "extending the chunk must not change the text")
+
+    def test_a_trailing_semicolon_is_sent_as_a_byte(self):
+        """A text that really ends with `;` needs the hex spelling.
+
+        There is no following character to carry the boundary past, so the
+        argument itself would lose its `;`. `-H 3b` writes the byte and cannot
+        be reinterpreted by the parser.
+        """
+        sent = []
+        pane = self._fake_pane(sent)
+        main_tdashboard.compat.send_keys(pane, "echo a;")
+        self.assertEqual(sent, [("send-keys", "echo a"),
+                                ("send-keys", "-H", "3b")])
+
 
 class CompatReExportsPrimitive(unittest.TestCase):
     """`compat.wait_pane_idle` / `compat.PaneBusy` must stay importable.
