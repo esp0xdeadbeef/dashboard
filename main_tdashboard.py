@@ -291,17 +291,27 @@ def interrupt(pane, attempts=3, settle=2.0, debugging=False):
     """
     if not hasattr(pane, "capture_pane"):
         return True
-    for _ in range(max(1, attempts)):
-        compat.send_keys(pane, "C-c")
-        deadline = time.time() + settle
-        while time.time() < deadline:
-            if _stable_prompt(pane, debugging=debugging):
-                return True
-            time.sleep(0.2)
     try:
         pane_pid = int(pane.cmd("display-message", "-p", "#{pane_pid}").stdout[0])
     except Exception:
         pane_pid = None
+
+    def idle():
+        # A prompt is not enough: a silent launcher leaves the cursor at the end of
+        # its last output line, which looks exactly like a prompt (measured
+        # 2026-11-26 -- `interrupt` returned True with `nix` still running). The
+        # pane's own children are the authority on whether anything is still there.
+        if not _stable_prompt(pane, debugging=debugging):
+            return False
+        return pane_pid is None or not _pane_children(pane_pid)
+
+    for _ in range(max(1, attempts)):
+        compat.send_keys(pane, "C-c")
+        deadline = time.time() + settle
+        while time.time() < deadline:
+            if idle():
+                return True
+            time.sleep(0.2)
     if pane_pid is not None:
         for sig in (15, 9):
             for kid in _pane_children(pane_pid):
@@ -311,10 +321,10 @@ def interrupt(pane, attempts=3, settle=2.0, debugging=False):
                     pass
             deadline = time.time() + settle
             while time.time() < deadline:
-                if _stable_prompt(pane, debugging=debugging):
+                if idle():
                     return True
                 time.sleep(0.2)
-    return _stable_prompt(pane, debugging=debugging)
+    return idle()
 
 
 def pane_stream(pane, inner_cmd, location=None, attempts=3,
