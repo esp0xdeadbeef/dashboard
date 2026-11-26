@@ -236,6 +236,28 @@ def _stream_script(inner_cmd):
     )
 
 
+_STREAM_PROMPT_TIMEOUT = 60
+
+
+def _wait_for_prompt(pane, timeout=None, debugging=False):
+    """Wait (read-only) until `pane` is a prompt, and say whether it is.
+
+    Used before typing. It never sends a keystroke: `_stable_prompt` reads the
+    cursor and the last line, so a pane that is still building is waited out
+    rather than typed into.
+    """
+    # A pane object that cannot be read is not ours to judge (test doubles pass a
+    # bare object); proceeding is what the caller asked for and cannot hang a run.
+    if not hasattr(pane, "capture_pane"):
+        return True
+    deadline = time.time() + (_STREAM_PROMPT_TIMEOUT if timeout is None else timeout)
+    while time.time() < deadline:
+        if _stable_prompt(pane, debugging=debugging):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def pane_stream(pane, inner_cmd, location=None, attempts=3,
                 scrollback=12000, debugging=False):
     """Run `inner_cmd` in `pane` and return its complete output, verified.
@@ -250,6 +272,19 @@ def pane_stream(pane, inner_cmd, location=None, attempts=3,
     """
     last = "no attempt made"
     for attempt in range(1, attempts + 1):
+        # Type only into a pane that is actually waiting for input. Typing into a
+        # running command concatenates the text onto whatever that program reads --
+        # and a launcher that a previous Ctrl-C has just killed leaves the pane at
+        # a prompt while the *caller's* keystrokes are still in flight (measured
+        # 2026-11-26: the HAT's `start` typed into the build and the guest never
+        # came up with `error: interrupted by the user`). The check is read-only,
+        # so waiting here cannot itself disturb the pane.
+        if not _wait_for_prompt(pane, timeout=_STREAM_PROMPT_TIMEOUT,
+                                debugging=debugging):
+            last = "pane never reached a prompt"
+            if debugging:
+                print(f"{{pane_stream}} attempt {attempt}: {last}")
+            continue
         marker = f"STREAM{os.getpid()}{int(time.time() * 1000)}"
         compat.send_keys(pane, f"echo {marker}_START; "
                                + _stream_script(inner_cmd)
