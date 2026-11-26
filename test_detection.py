@@ -673,6 +673,39 @@ class StreamFraming(unittest.TestCase):
         self.assertIsNotNone(self.REC.match(line))
 
 
+class Interrupt(unittest.TestCase):
+    """`interrupt` must get a pane back to a prompt, not just send Ctrl-C."""
+
+    def test_stops_when_the_pane_returns_to_a_prompt(self):
+        import compat
+
+        sent = []
+        real_send = compat.send_keys
+        compat.send_keys = lambda pane, *keys: sent.append(keys)
+        self.addCleanup(setattr, compat, "send_keys", real_send)
+
+        class Pane:
+            pane_id = "%0"
+            busy = True
+
+            def capture_pane(self):
+                return ["\u2514\u2500[%] sleep 300", ""] if self.busy else ["\u2514\u2500[%] "]
+
+            def cmd(self, *args):
+                raise AssertionError("no /proc poking when the prompt comes back")
+
+        pane = Pane()
+        # The pane settles on the first look after Ctrl-C, so `interrupt` must stop
+        # there: one keystroke, no /proc escalation.
+        real_stable = main_tdashboard._stable_prompt
+        main_tdashboard._stable_prompt = lambda p, debugging=False: True
+        self.addCleanup(setattr, main_tdashboard, "_stable_prompt", real_stable)
+
+        self.assertTrue(main_tdashboard.interrupt(pane, settle=0.01),
+                        "interrupt must report the prompt it reached")
+        self.assertEqual(sent, [("C-c",)], "one Ctrl-C is enough when the prompt returns")
+
+
 class PaneStreamReassembly(unittest.TestCase):
     """pane_stream's reassembly, exercised offline with a fake pane.
 

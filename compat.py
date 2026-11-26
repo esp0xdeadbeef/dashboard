@@ -614,6 +614,13 @@ def __getattr__(name):
     if name == "LAUNCHER_EXIT_PREFIX":
         import main_tdashboard as _d
         return _d.LAUNCHER_EXIT_PREFIX
+    # `compat.interrupt(pane)` brings a pane back to a prompt: Ctrl-C, read-only
+    # wait, then the launcher's children if it will not go. An out-of-tree caller
+    # (the HAT's `hat-isp.py stop`) needs it, and it must be the same function the
+    # dashboard itself uses.
+    if name == "interrupt":
+        import main_tdashboard as _d
+        return _d.interrupt
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

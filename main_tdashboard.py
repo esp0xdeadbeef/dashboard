@@ -258,6 +258,65 @@ def _wait_for_prompt(pane, timeout=None, debugging=False):
     return False
 
 
+def _pane_children(pid):
+    """Descendant pids of `pid`, deepest last. Empty when /proc is unreadable."""
+    out = []
+    stack = [pid]
+    while stack:
+        current = stack.pop()
+        try:
+            kids = open(f"/proc/{current}/task/{current}/children").read().split()
+        except OSError:
+            continue
+        for kid in kids:
+            kid = int(kid)
+            out.append(kid)
+            stack.append(kid)
+    return out
+
+
+def interrupt(pane, attempts=3, settle=2.0, debugging=False):
+    """Bring `pane` back to a prompt, interrupting whatever is running.
+
+    A pane that an earlier Ctrl-C half-killed keeps a launcher alive: the run looks
+    finished, the next `start` types into a busy pane, and the build dies with
+    `error: interrupted by the user` as if the guest were at fault (measured
+    2026-11-26, HAT `start cobalt`). `stop` could only type `poweroff` at a guest
+    shell, so nothing ever cleaned that up.
+
+    Ctrl-C first, waiting read-only for the prompt after each one; if the pane is
+    still busy after `attempts`, the launcher's children are signalled, since a
+    process that ignores the interrupt would otherwise hold the pane forever.
+    Returns True when the pane is at a prompt when this returns.
+    """
+    if not hasattr(pane, "capture_pane"):
+        return True
+    for _ in range(max(1, attempts)):
+        compat.send_keys(pane, "C-c")
+        deadline = time.time() + settle
+        while time.time() < deadline:
+            if _stable_prompt(pane, debugging=debugging):
+                return True
+            time.sleep(0.2)
+    try:
+        pane_pid = int(pane.cmd("display-message", "-p", "#{pane_pid}").stdout[0])
+    except Exception:
+        pane_pid = None
+    if pane_pid is not None:
+        for sig in (15, 9):
+            for kid in _pane_children(pane_pid):
+                try:
+                    os.kill(kid, sig)
+                except OSError:
+                    pass
+            deadline = time.time() + settle
+            while time.time() < deadline:
+                if _stable_prompt(pane, debugging=debugging):
+                    return True
+                time.sleep(0.2)
+    return _stable_prompt(pane, debugging=debugging)
+
+
 def pane_stream(pane, inner_cmd, location=None, attempts=3,
                 scrollback=12000, debugging=False):
     """Run `inner_cmd` in `pane` and return its complete output, verified.
