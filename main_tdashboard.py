@@ -753,7 +753,8 @@ def at_end(pane, time_out=1, debugging=False,
            send_enter_to_check_if_interpreter=True,
            require_shell=False,
            probe=False,
-           expect_host=None):
+           expect_host=None,
+           destructive_probe=False):
     """True when the program in `pane` is blocked waiting for terminal input.
 
     Previous implementation typed 52 characters of junk into the pane, erased
@@ -811,7 +812,8 @@ def at_end(pane, time_out=1, debugging=False,
     hosts_terminal = termstate.is_terminal_host(target)
     stable = None
     if probe or (hosts_terminal and send_enter_to_check_if_interpreter):
-        stable = _stable_prompt(pane, debugging=debugging)
+        stable = _stable_prompt(pane, debugging=debugging,
+                                send_enter=destructive_probe)
 
     state = termstate.pane_state(target, expect_host=expect_host,
                                  stable=stable)
@@ -880,8 +882,41 @@ def _screen_signature(pane):
     return "\n".join(lines)
 
 
-def _stable_prompt(pane, debugging=False):
-    """True when a bare Enter leaves the pane looking the same.
+def _cursor_position(pane):
+    """The cursor cell of `pane` as (x, y), or None when tmux cannot say.
+
+    Read with `display-message`, which inspects the pane without writing to it.
+    """
+    try:
+        out = pane.cmd(
+            "display-message", "-p", "-t", _pane_target(pane),
+            "#{cursor_x} #{cursor_y}").stdout
+        fields = out[0].split()
+        return int(fields[0]), int(fields[1])
+    except Exception:
+        return None
+
+
+def _stable_prompt(pane, debugging=False, send_enter=False):
+    """True when the pane is a prompt, checked WITHOUT typing into it.
+
+    The old check pressed a bare Enter and waited for the same line to come
+    back. That answers correctly and mutates what it measures: the keystroke
+    lands in whatever owns the pane. Measured 2026-11-26: the HAT launcher had
+    already exited, the pane was a fresh shell, the probe's Enter arrived while
+    the start command was being typed and the shell reported "Command aborted" --
+    the run looked like a broken guest. The same Enter is worse in the case the
+    probe exists for: a booting guest, a login prompt, or a program reading
+    stdin receives it as input.
+
+    The prompt is now read from the terminal itself: the cursor must sit at the
+    end of the last non-empty line and both the line and the cursor must be
+    unchanged a moment later. A shell at a prompt satisfies all three; a command
+    producing output changes the line, a command that exited leaves the cursor
+    at column 0 of the next row, and a booting guest never holds still.
+
+    `send_enter=True` restores the redrawing check for callers that require it
+    (and only those should use it).
 
     This is the check that works for a pane hosting another terminal, where
     process state cannot help. A program at a prompt redraws that prompt
@@ -944,6 +979,51 @@ def _stable_prompt(pane, debugging=False):
         if debugging:
             print(f"{{at_end/probe}} not a shell: {before!r}")
         return False
+
+    if not send_enter:
+        # Non-destructive probe: cursor at the end of the last non-empty line,
+        # and nothing moving. No keystrokes reach the pane.
+        position = _cursor_position(pane)
+        if position is None:
+            if debugging:
+                print("{at_end/probe} cursor position unavailable; not ready")
+            return False
+        lines = compat.capture_pane(pane)
+        last_row = None
+        for index in range(len(lines) - 1, -1, -1):
+            if lines[index].rstrip().strip():
+                last_row = index
+                break
+        if last_row is None:
+            return False
+        # tmux counts rows from the top of the *visible* pane, and so does
+        # `capture_pane`, so the two indexes are comparable.
+        cursor_x, cursor_y = position
+        if cursor_y != last_row:
+            if debugging:
+                print(f"{{at_end/probe}} cursor on row {{cursor_y}} but text ends at {{last_row}}")
+            return False
+        if cursor_x < len(before):
+            if debugging:
+                print(f"{{at_end/probe}} cursor at {{cursor_x}}, before the prompt end {{len(before)}}")
+            return False
+        time.sleep(0.15)
+        if _cursor_position(pane) != position:
+            if debugging:
+                print("{at_end/probe} cursor moved")
+            return False
+        after = prompt_line()
+        if after != before:
+            if debugging:
+                print(f"{{at_end/probe}} line changed: {{before!r}} -> {{after!r}}")
+            return False
+        if is_not_a_shell(after):
+            if debugging:
+                print(f"{{at_end/probe}} stable but not a shell: {{after!r}}")
+            return False
+        if debugging:
+            print(f"{{at_end/probe}} cursor at end of {{after!r}}")
+        return True
 
     compat.send_keys(pane, "")
     compat.send_keys(pane, "C-m")

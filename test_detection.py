@@ -127,6 +127,49 @@ class StablePromptProbe(unittest.TestCase):
             out.pop()
         return "\n".join(out)
 
+    def test_probe_does_not_type_into_the_pane(self):
+        """The readiness probe must read the terminal, not write to it.
+
+        Pressing Enter answered the question and mutated what it measured: on
+        2026-11-26 the HAT launcher had already exited, the probe's Enter landed
+        in the shell while `start` was typing there, and the run reported
+        "Command aborted" -- which reads exactly like a broken guest. In the case
+        the probe exists for (a booting guest, a login prompt, a program reading
+        stdin) that Enter is input.
+        """
+        import compat
+
+        class Pane:
+            pane_id = "%0"
+
+            def __init__(self, lines, cursor):
+                self.lines = lines
+                self.cursor = cursor
+
+            def cmd(self, *args):
+                class R:
+                    stdout = ["%d %d" % self.cursor]
+
+                return R()
+
+            def capture_pane(self):
+                return list(self.lines)
+
+        sent = []
+        real_send = compat.send_keys
+        compat.send_keys = lambda pane, *keys: sent.append(keys)
+        self.addCleanup(setattr, compat, "send_keys", real_send)
+
+        at_prompt = Pane(["\u2514\u2500[deadbeef@l-esp] - [~/x] - [main]", "\u2514\u2500[%] "], (7, 1))
+        self.assertTrue(main_tdashboard._stable_prompt(at_prompt),
+                        "a cursor parked at the end of the prompt is a prompt")
+        self.assertEqual(sent, [], "the probe must not send a keystroke")
+
+        busy = Pane(["\u2514\u2500[%] nix build .#x", "building...", ""], (0, 2))
+        self.assertFalse(main_tdashboard._stable_prompt(busy),
+                         "a cursor on the empty row below the output is a running command")
+        self.assertEqual(sent, [], "the probe must not send a keystroke")
+
     def test_junk_is_ignored_when_comparing(self):
         # Async console junk must not make two samples of the same pane differ:
         # the guest prompt is identical, only the timestamped line changes.
