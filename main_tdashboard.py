@@ -228,7 +228,16 @@ def _stream_script(inner_cmd):
         # `printf "L1\nL2\n"` worked, `printf L1; echo; printf L2; echo`
         # reported "the command produced no output", and so did a legitimate
         # `echo A; echo B`.
-        f"{{ {inner_cmd}; }} | base64 -w 60 > /tmp/.dash_stream; "
+        # The exit status is emitted as its own final record. Without it a
+        # command that legitimately prints nothing (`mkdir -p /run/x`, `true`,
+        # an `ip route add`) is indistinguishable from a broken read, and
+        # `pane_stream` reported it as "the command produced no output" --
+        # measured 2026-11-28 on the HAT: the probe's `mkdir -p /run/hat-isp`
+        # failed that way, so every later probe in the same run wrote into a
+        # directory that did not exist and the whole verdict came back UNKNOWN
+        # while DNS was in fact resolving.
+        f"{{ {{ {inner_cmd}; }}; echo \"__RC__$?\"; }} | base64 -w 60 "
+        "> /tmp/.dash_stream; "
         "n=$(wc -l < /tmp/.dash_stream); i=0; "
         "while read -r l; do i=$((i+1)); "
         'echo "$i:$n:$l:$(printf %s "$l" | base64 -w0 | md5sum | cut -c1-8)"; '
@@ -429,6 +438,24 @@ def pane_stream(pane, inner_cmd, location=None, attempts=3,
         text = base64.b64decode(
             "".join(records[i][0] for i in range(1, total + 1)),
             validate=True).decode(errors="replace")
+        # Split off the status record. `rc == 0` with no other payload is a
+        # silent but successful command and returns "" -- that is a result, not
+        # a read failure. A non-zero status with no payload keeps failing, but
+        # now says what the command did instead of blaming the console.
+        rc = None
+        lines_out = text.split("\n")
+        for index in range(len(lines_out) - 1, -1, -1):
+            line = lines_out[index]
+            if line.startswith("__RC__"):
+                rc = int(line[len("__RC__"):])
+                lines_out = lines_out[:index] + lines_out[index + 1:]
+                break
+        text = "\n".join(lines_out)
+        if rc not in (None, 0) and text.strip() == "":
+            last = f"the command exited {rc} and printed nothing"
+            if debugging:
+                print(f"{{pane_stream}} attempt {attempt}: {last}")
+            continue
         if location:
             with open(location, "w") as fh:
                 fh.write(text)

@@ -796,6 +796,22 @@ class PaneStreamReassembly(unittest.TestCase):
         got = self._run([self._board_screen(lines, spam_after={1, 2, 3})], lines)
         self.assertEqual(got.splitlines(), lines)
 
+    def test_silent_success_returns_empty(self):
+        """A command that legitimately prints nothing is a result, not a fault.
+
+        Measured 2026-11-28 on the HAT: the probe's `mkdir -p /run/hat-isp`
+        produced no output, `pane_stream` called that a console failure, the
+        directory was never created, and every later probe in the run wrote
+        into the missing directory and came back UNKNOWN -- while DNS was in
+        fact resolving. The status record distinguishes the two.
+        """
+        got = self._run([self._board_screen(["__RC__0"])], [])
+        self.assertEqual(got.strip(), "")
+
+    def test_silent_failure_still_raises(self):
+        with self.assertRaises(main_tdashboard.compat.CompatError):
+            self._run([self._board_screen(["__RC__1"])] * 2, [])
+
     def test_missing_record_raises_instead_of_truncating(self):
         """A gap must be fatal, never a short-but-plausible answer."""
         lines = ["USER PID"] + [f"root {i} proc-{i:03d}-padding-padding"
@@ -1379,11 +1395,19 @@ class StreamScriptGrouping(unittest.TestCase):
 
     def test_semicolons_are_grouped_under_one_pipe(self):
         script = main_tdashboard._stream_script("echo A; echo B")
-        self.assertIn("{ echo A; echo B; } | base64", script)
+        self.assertIn("{ { echo A; echo B; }; echo \"__RC__$?\"; } | base64",
+                      script)
 
     def test_a_single_command_is_still_grouped(self):
-        self.assertIn("{ true; } | base64",
+        self.assertIn("{ { true; }; echo \"__RC__$?\"; } | base64",
                       main_tdashboard._stream_script("true"))
+
+    def test_exit_status_is_emitted_after_the_command(self):
+        """The status record is what makes a silent command readable."""
+        script = main_tdashboard._stream_script("mkdir -p /run/x")
+        self.assertIn('echo "__RC__$?"', script)
+        self.assertLess(script.index("mkdir -p /run/x"),
+                        script.index('echo "__RC__$?"'))
 
 
 class LauncherExited(unittest.TestCase):
