@@ -1395,19 +1395,19 @@ class StreamScriptGrouping(unittest.TestCase):
 
     def test_semicolons_are_grouped_under_one_pipe(self):
         script = main_tdashboard._stream_script("echo A; echo B")
-        self.assertIn("{ { echo A; echo B; }; echo \"__RC__$?\"; } | base64",
-                      script)
+        self.assertIn("{ { echo A; echo B; }; printf '\\n__RC__%s\\n' \"$?\"; } "
+                      "| base64", script)
 
     def test_a_single_command_is_still_grouped(self):
-        self.assertIn("{ { true; }; echo \"__RC__$?\"; } | base64",
+        self.assertIn("{ { true; }; printf '\\n__RC__%s\\n' \"$?\"; } | base64",
                       main_tdashboard._stream_script("true"))
 
     def test_exit_status_is_emitted_after_the_command(self):
         """The status record is what makes a silent command readable."""
         script = main_tdashboard._stream_script("mkdir -p /run/x")
-        self.assertIn('echo "__RC__$?"', script)
+        self.assertIn("printf '\\n__RC__%s\\n' \"$?\"", script)
         self.assertLess(script.index("mkdir -p /run/x"),
-                        script.index('echo "__RC__$?"'))
+                        script.index("__RC__"))
 
 
 class LauncherExited(unittest.TestCase):

@@ -236,8 +236,12 @@ def _stream_script(inner_cmd):
         # failed that way, so every later probe in the same run wrote into a
         # directory that did not exist and the whole verdict came back UNKNOWN
         # while DNS was in fact resolving.
-        f"{{ {{ {inner_cmd}; }}; echo \"__RC__$?\"; }} | base64 -w 60 "
-        "> /tmp/.dash_stream; "
+        # The newline before the status record is load-bearing: without it a
+        # command that ends without a trailing newline (`printf %s 301`, a
+        # `curl -w '%{http_code}'`) produced "301__RC__0" and the status was
+        # never stripped. Measured 2026-11-28 on the HAT's https probe.
+        f"{{ {{ {inner_cmd}; }}; printf '\\n__RC__%s\\n' \"$?\"; }} "
+        "| base64 -w 60 > /tmp/.dash_stream; "
         "n=$(wc -l < /tmp/.dash_stream); i=0; "
         "while read -r l; do i=$((i+1)); "
         'echo "$i:$n:$l:$(printf %s "$l" | base64 -w0 | md5sum | cut -c1-8)"; '
@@ -450,6 +454,8 @@ def pane_stream(pane, inner_cmd, location=None, attempts=3,
                 rc = int(line[len("__RC__"):])
                 lines_out = lines_out[:index] + lines_out[index + 1:]
                 break
+        if lines_out and lines_out[-1] == "":
+            lines_out = lines_out[:-1]
         text = "\n".join(lines_out)
         if rc not in (None, 0) and text.strip() == "":
             last = f"the command exited {rc} and printed nothing"
